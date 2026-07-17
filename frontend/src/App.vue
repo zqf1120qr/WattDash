@@ -598,7 +598,7 @@ const settingsForm = ref({
 
 // ECharts states
 const chartContainer = ref(null)
-const chartDays = ref(7)
+const chartDays = ref('today')
 const chartLoading = ref(false)
 let chartInstance = null
 
