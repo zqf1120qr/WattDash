@@ -1,0 +1,37 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../backend.Dockerfile
+    container_name: wattdash-backend
+    restart: always
+    environment:
+      - DATABASE_URL=sqlite:////workspace/backend/app/database/wattdash.db
+      - CHROMIUM_PATH=/usr/bin/chromium
+      - CHROMIUM_USER_DATA=/tmp/chromium_user_data
+      - SECRET_KEY=your-custom-production-secret-key-here
+    ports:
+      - "9100:9100"
+    shm_size: '1gb'
+    volumes:
+      # Persist SQLite database file
+      - ./backend_data:/workspace/backend/app/database
+    networks:
+      - wattdash-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../frontend.Dockerfile
+    container_name: wattdash-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - wattdash-net
+
+networks:
+  wattdash-net:
+    driver: bridge

@@ -1,0 +1,34 @@
+# IDE & Editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Node / Frontend
+node_modules/
+dist/
+.eslintcache
+
+# Project Runtime & Credentials
+.env
+token.txt
+*.db
+*.db-journal
+*.log
+
+# Data Volumes & Temporary Files
+backend_data/
+backend/app/database/screenshots/
+backend/app/database/success_screenshot.png
