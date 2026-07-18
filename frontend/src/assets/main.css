@@ -85,3 +85,54 @@ html.dark {
   border: 1px solid #1E293B !important;
   background-color: #151B2C !important;
 }
+
+/* Custom overrides for settings tabs in dark mode */
+.settings-tabs .el-tabs__header {
+  border-bottom: 1px solid #1E293B !important;
+}
+.settings-tabs .el-tabs__item {
+  border-left: 1px solid #1E293B !important;
+  border-bottom: 1px solid #1E293B !important;
+  color: #94A3B8 !important;
+  background-color: #0F172A !important;
+}
+.settings-tabs .el-tabs__item.is-active {
+  background-color: #151B2C !important;
+  color: #818CF8 !important;
+  border-bottom-color: #151B2C !important;
+}
+.settings-tabs .el-tabs__nav {
+  border: 1px solid #1E293B !important;
+  border-bottom: none !important;
+}
+
+/* Custom overrides for checkboxes in dark mode */
+.el-checkbox__inner {
+  background-color: #0B0F19 !important;
+  border-color: #1E293B !important;
+}
+.el-checkbox__input.is-checked .el-checkbox__inner {
+  background-color: #6366F1 !important;
+  border-color: #6366F1 !important;
+}
+.el-checkbox__input.is-focus .el-checkbox__inner {
+  border-color: #6366F1 !important;
+}
+.el-checkbox__label {
+  color: #94A3B8 !important;
+}
+.el-checkbox__input.is-checked + .el-checkbox__label {
+  color: #F8FAFC !important;
+}
+
+/* Custom overrides for textareas in dark mode */
+.el-textarea__inner {
+  background-color: #0B0F19 !important;
+  color: #F8FAFC !important;
+  border: 1px solid #1E293B !important;
+  box-shadow: none !important;
+}
+.el-textarea__inner:focus {
+  border-color: #6366F1 !important;
+  box-shadow: 0 0 0 1px #6366F1 inset !important;
+}
