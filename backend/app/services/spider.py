@@ -293,7 +293,28 @@ class SpiderService:
     def execute_query(cls, jsessionid: str, query_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute raw API query using curl_cffi to match client fingerprints.
+        Supports up to 3 automatic retries for transient network timeouts/failures.
         """
+        import time
+        max_retries = 3
+        last_error_msg = "未知数据拉取错误"
+        
+        for attempt in range(1, max_retries + 1):
+            if attempt > 1:
+                logger.info(f"Retrying electricity query (attempt {attempt}/{max_retries})...")
+            
+            res = cls._execute_query_raw(jsessionid, query_config)
+            if res.get("status") in ["success", "expired"]:
+                return res
+            
+            last_error_msg = res.get("msg", "未完成查询")
+            if attempt < max_retries:
+                time.sleep(2)
+                
+        return {"status": "error", "msg": last_error_msg}
+
+    @classmethod
+    def _execute_query_raw(cls, jsessionid: str, query_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         query_url = "https://wxy.swjtu.edu.cn/wechat/basicQuery/queryElecRoomInfo.html"
         headers = {
             'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -320,7 +341,7 @@ class SpiderService:
                 impersonate="chrome110", 
                 verify=False, 
                 allow_redirects=False,
-                timeout=10
+                timeout=15
             )
             
             if response.status_code == 302 or 'cas.swjtu.edu.cn' in response.text:

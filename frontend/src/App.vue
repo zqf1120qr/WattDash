@@ -184,7 +184,7 @@
       </div>
 
       <!-- Trend Charts Panel -->
-      <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-6 shadow-xl">
+      <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-4 sm:p-6 shadow-xl">
         <div class="flex flex-col sm:flex-row items-center justify-between mb-6 pb-4 border-b border-[#1E293B]">
           <div class="mb-4 sm:mb-0">
             <h3 class="text-lg font-bold text-white">用电量与余额趋势分析</h3>
@@ -962,6 +962,13 @@ const drawTrendChart = async () => {
     // Clear previous option to prevent axis mixing issues when toggling chart types
     chartInstance.clear()
     
+    let zoomStart = 0
+    if (isToday && data.times && data.times.length > 8) {
+      zoomStart = Math.max(0, 100 - (8 / data.times.length) * 100)
+    } else if (!isToday && data.dates && data.dates.length > 10) {
+      zoomStart = Math.max(0, 100 - (10 / data.dates.length) * 100)
+    }
+
     let option
     if (isToday) {
       option = {
@@ -983,17 +990,49 @@ const drawTrendChart = async () => {
         legend: {
           data: ['分时余额 (元)', '分时电量 (度)'],
           textStyle: {
-            color: '#94A3B8'
+            color: '#94A3B8',
+            fontSize: 10
           },
-          top: 0
+          bottom: 0,
+          itemWidth: 12,
+          itemHeight: 8
         },
         grid: {
           left: '3%',
           right: '3%',
-          bottom: '3%',
+          bottom: 60,
           top: '12%',
           containLabel: true
         },
+        dataZoom: [
+          {
+            type: 'inside',
+            xAxisIndex: 0,
+            start: zoomStart,
+            end: 100,
+            zoomOnMouseWheel: false,
+            moveOnMouseMove: true
+          },
+          {
+            type: 'slider',
+            show: data.times && data.times.length > 8,
+            xAxisIndex: 0,
+            start: zoomStart,
+            end: 100,
+            height: 12,
+            bottom: 22,
+            handleSize: '100%',
+            textStyle: {
+              color: 'transparent'
+            },
+            borderColor: 'transparent',
+            fillerColor: 'rgba(56, 189, 248, 0.15)',
+            backgroundColor: 'rgba(30, 41, 59, 0.5)',
+            handleStyle: {
+              color: '#38BDF8'
+            }
+          }
+        ],
         xAxis: [
           {
             type: 'category',
@@ -1050,7 +1089,8 @@ const drawTrendChart = async () => {
               show: true,
               position: 'top',
               color: '#38BDF8',
-              fontSize: 10
+              fontSize: 10,
+              hideOverlap: true
             },
             itemStyle: {
               color: '#38BDF8'
@@ -1074,10 +1114,7 @@ const drawTrendChart = async () => {
             yAxisIndex: 1,
             data: data.balances,
             label: {
-              show: true,
-              position: 'bottom',
-              color: '#A78BFA',
-              fontSize: 10
+              show: false
             },
             itemStyle: {
               color: '#A78BFA'
@@ -1109,17 +1146,49 @@ const drawTrendChart = async () => {
         legend: {
           data: ['电费余额 (元)', '当日耗电量 (度)'],
           textStyle: {
-            color: '#94A3B8'
+            color: '#94A3B8',
+            fontSize: 10
           },
-          top: 0
+          bottom: 0,
+          itemWidth: 12,
+          itemHeight: 8
         },
         grid: {
           left: '3%',
           right: '3%',
-          bottom: '3%',
+          bottom: 60,
           top: '12%',
           containLabel: true
         },
+        dataZoom: [
+          {
+            type: 'inside',
+            xAxisIndex: 0,
+            start: zoomStart,
+            end: 100,
+            zoomOnMouseWheel: false,
+            moveOnMouseMove: true
+          },
+          {
+            type: 'slider',
+            show: data.dates && data.dates.length > 10,
+            xAxisIndex: 0,
+            start: zoomStart,
+            end: 100,
+            height: 12,
+            bottom: 22,
+            handleSize: '100%',
+            textStyle: {
+              color: 'transparent'
+            },
+            borderColor: 'transparent',
+            fillerColor: 'rgba(192, 132, 252, 0.15)',
+            backgroundColor: 'rgba(30, 41, 59, 0.5)',
+            handleStyle: {
+              color: '#C084FC'
+            }
+          }
+        ],
         xAxis: [
           {
             type: 'category',
@@ -1182,6 +1251,7 @@ const drawTrendChart = async () => {
               position: 'insideTop',
               color: '#FFFFFF',
               fontSize: 10,
+              hideOverlap: true,
               formatter: (params) => params.value !== null ? params.value.toFixed(1) : ''
             },
             itemStyle: {
@@ -1202,7 +1272,8 @@ const drawTrendChart = async () => {
               show: true,
               position: 'top',
               color: '#38BDF8',
-              fontSize: 10
+              fontSize: 10,
+              hideOverlap: true
             },
             itemStyle: {
               color: '#38BDF8'
