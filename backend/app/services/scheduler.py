@@ -85,19 +85,18 @@ def fetch_and_calculate_daily(is_end_of_day: bool = False):
             # Save intraday balance snapshot
             intraday = IntradayBalanceRecord(balance=power_val)
             db.add(intraday)
+            
+            # ALWAYS calculate daily consumption and update the daily record
+            record = CalculatorService.calculate_daily_consumption(db, power_val, today_date)
             db.commit()
 
             LogService.add_log(db, f"【定时自动同步】同步完成！获取最新余额: {power_val} 度 ({(power_val * 0.5):.2f} 元)。", "success")
 
-            if is_end_of_day:
-                record = CalculatorService.calculate_daily_consumption(db, power_val, today_date)
-                if record.is_abnormal:
-                    LogService.add_log(db, f"【定时自动同步】[自愈计算] 今日用电量异常：{record.anomaly_reason}", "warning")
-                else:
-                    cons_val = f"{record.consumption:.2f} 度" if record.consumption is not None else "-- 度"
-                    LogService.add_log(db, f"【定时自动同步】[自愈计算] 今日耗电量: {cons_val}。", "success")
+            if record.is_abnormal:
+                LogService.add_log(db, f"【定时自动同步】[自愈计算] 今日用电量异常：{record.anomaly_reason}", "warning")
             else:
-                LogService.add_log(db, "【定时自动同步】分时电量记账成功，已存入当日趋势分析表。", "success")
+                cons_val = f"{record.consumption:.2f} 度" if record.consumption is not None else "-- 度"
+                LogService.add_log(db, f"【定时自动同步】[自愈计算] 今日累计耗电量: {cons_val}。", "success")
         else:
             err_msg = query_result.get("msg", "未知数据拉取错误") if query_result else "未完成查询"
             logger.error(f"Daily sync failed: {err_msg}")
