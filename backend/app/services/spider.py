@@ -344,6 +344,8 @@ class SpiderService:
                 timeout=15
             )
             
+            logger.info(f"Raw query response - Status: {response.status_code}, Length: {len(response.text)}, Preview: {response.text[:250]}")
+            
             if response.status_code == 302 or 'cas.swjtu.edu.cn' in response.text:
                 return {"status": "expired"}
                 
