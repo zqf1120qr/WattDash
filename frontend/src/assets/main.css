@@ -63,3 +63,25 @@ body {
 .el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell {
   background-color: #1E293B !important;
 }
+
+/* Custom variables for Element Plus dark theme variables */
+html.dark {
+  --el-bg-color: #0F172A !important;
+  --el-bg-color-overlay: #151B2C !important;
+  --el-border-color-light: #1E293B !important;
+  --el-border-color-extra-light: #1E293B !important;
+  --el-border-color-lighter: #1E293B !important;
+  --el-text-color-regular: #94A3B8 !important;
+  --el-text-color-primary: #F8FAFC !important;
+  --el-fill-color-light: #1E293B !important;
+  --el-fill-color-blank: #151B2C !important;
+}
+
+/* Fix element-plus datepicker cell border and hover styles for consistency */
+.el-date-table th {
+  border-bottom: 1px solid #1E293B !important;
+}
+.el-picker-panel {
+  border: 1px solid #1E293B !important;
+  background-color: #151B2C !important;
+}
