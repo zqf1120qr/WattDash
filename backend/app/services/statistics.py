@@ -140,6 +140,7 @@ class StatisticsService:
     def get_intraday_data(db: Session, date_str: Optional[str] = None) -> Dict[str, List[Any]]:
         """
         Fetch intraday (hourly) balance records for a specific date (local Beijing time).
+        Also prepends the last query record from the previous day to visualize overnight changes.
         """
         shanghai_tz = dt_timezone(timedelta(hours=8))
         if date_str:
@@ -157,6 +158,7 @@ class StatisticsService:
         utc_today_start = local_today_start.astimezone(dt_timezone.utc).replace(tzinfo=None)
         utc_today_end = local_today_end.astimezone(dt_timezone.utc).replace(tzinfo=None)
         
+        # 1. Fetch target day's records
         records = (
             db.query(IntradayBalanceRecord)
             .filter(and_(IntradayBalanceRecord.query_time >= utc_today_start, IntradayBalanceRecord.query_time <= utc_today_end))
@@ -164,14 +166,36 @@ class StatisticsService:
             .all()
         )
         
+        # 2. Fetch the last record from the previous day
+        local_yesterday_start = local_today_start - timedelta(days=1)
+        local_yesterday_end = local_today_start - timedelta(seconds=1)
+        utc_yesterday_start = local_yesterday_start.astimezone(dt_timezone.utc).replace(tzinfo=None)
+        utc_yesterday_end = local_yesterday_end.astimezone(dt_timezone.utc).replace(tzinfo=None)
+        
+        yesterday_last = (
+            db.query(IntradayBalanceRecord)
+            .filter(and_(IntradayBalanceRecord.query_time >= utc_yesterday_start, IntradayBalanceRecord.query_time <= utc_yesterday_end))
+            .order_by(IntradayBalanceRecord.query_time.desc())
+            .first()
+        )
+        
+        records_to_process = []
+        if yesterday_last:
+            records_to_process.append(yesterday_last)
+        records_to_process.extend(records)
+        
         times = []
         balances_degrees = []
         balances_yuan = []
         
-        for r in records:
-            # Convert UTC database time to local Shanghai time for readability
+        for r in records_to_process:
             local_time = r.query_time.replace(tzinfo=dt_timezone.utc).astimezone(shanghai_tz)
-            times.append(local_time.strftime("%H:%M"))
+            if local_time.date() < local_today_start.date():
+                time_str = f"昨日 {local_time.strftime('%H:%M')}"
+            else:
+                time_str = local_time.strftime("%H:%M")
+                
+            times.append(time_str)
             balances_degrees.append(round(r.balance, 2))
             balances_yuan.append(round(r.balance * 0.5, 2))
             
