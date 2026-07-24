@@ -3,7 +3,9 @@ import re
 import time
 import uuid
 import json
+import signal
 import logging
+import subprocess
 from typing import Dict, Tuple, Optional, Any
 from DrissionPage import ChromiumPage, ChromiumOptions
 from curl_cffi import requests
@@ -54,6 +56,71 @@ class SpiderService:
         return co
 
     @staticmethod
+    def _kill_zombie_chromium():
+        """
+        Kill any lingering Chromium processes that may prevent a new browser instance
+        from starting. This handles zombie processes left behind by crashed sessions.
+        """
+        try:
+            if os.name == 'nt':  # Windows
+                result = subprocess.run(
+                    ['taskkill', '/F', '/IM', 'chrome.exe', '/T'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    logger.info("Killed lingering Chrome processes on Windows.")
+            else:  # Linux / macOS
+                result = subprocess.run(
+                    ['pkill', '-9', '-f', 'chrome.*persistent_profile'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    logger.info("Killed lingering Chrome processes matching persistent_profile.")
+        except Exception as e:
+            logger.warning(f"Failed to kill zombie Chromium processes: {e}")
+
+    @classmethod
+    def _clean_profile_locks(cls):
+        """
+        Remove all lock files from the Chromium persistent profile directory
+        to prevent startup failures.
+        """
+        profile_dir = os.path.join(settings.CHROMIUM_USER_DATA, "persistent_profile")
+        lock_files = ["SingletonLock", "SingletonSocket", "SingletonCookie"]
+        for lock_name in lock_files:
+            lock_path = os.path.join(profile_dir, lock_name)
+            if os.path.islink(lock_path) or os.path.exists(lock_path):
+                try:
+                    os.unlink(lock_path)
+                    logger.info(f"Removed Chromium lock file: {lock_name}")
+                except Exception as e:
+                    logger.warning(f"Could not remove lock file {lock_name}: {e}")
+
+    @classmethod
+    def _create_browser_with_retry(cls, max_retries: int = 3) -> ChromiumPage:
+        """
+        Create a ChromiumPage instance with automatic retry on connection failures.
+        Cleans up zombie processes and lock files between attempts.
+        """
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                co = cls.get_chromium_options()
+                page = ChromiumPage(co)
+                if attempt > 1:
+                    logger.info(f"Browser started successfully on attempt {attempt}.")
+                return page
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Browser connection failed (attempt {attempt}/{max_retries}): {e}")
+                if attempt < max_retries:
+                    # Kill zombie processes and clean lock files before retrying
+                    cls._kill_zombie_chromium()
+                    time.sleep(3)  # Wait for processes to fully terminate
+                    cls._clean_profile_locks()
+        raise last_error
+
+    @staticmethod
     def read_token() -> Optional[str]:
         if settings.TOKEN_FILE.exists():
             try:
@@ -98,10 +165,9 @@ class SpiderService:
         Returns 'success' (direct login or automatic refresh) or 'need_sms' (MFA).
         """
         logger.info(">>> [Phase 1] Initializing browser for login...")
-        co = cls.get_chromium_options()
         page = None
         try:
-            page = ChromiumPage(co)
+            page = cls._create_browser_with_retry(max_retries=3)
             page.get('https://wxy.swjtu.edu.cn/')
             
             time.sleep(2)
