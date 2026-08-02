@@ -1,4 +1,5 @@
 import logging
+import time as _time
 from datetime import date, datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.database import SessionLocal
@@ -12,6 +13,82 @@ from app.services.log import LogService
 logger = logging.getLogger("wattdash.scheduler")
 
 scheduler = BackgroundScheduler()
+
+# Scheduler-level retry: if the query fails after login, wait and retry.
+# This handles transient network outages that persist beyond the per-request
+# 3-retry window (45 seconds) inside execute_query.
+SCHEDULER_QUERY_MAX_RETRIES = 2
+SCHEDULER_QUERY_RETRY_DELAY_SECONDS = 120  # 2 minutes
+
+# Scheduler-level retry for browser login: headless Chromium can fail due to
+# transient issues (zombie processes, page timeouts, rendering glitches).
+SCHEDULER_LOGIN_MAX_RETRIES = 2
+SCHEDULER_LOGIN_RETRY_DELAY_SECONDS = 60  # 1 minute
+
+
+def _attempt_query(token: str, query_config, db) -> dict:
+    """
+    Attempt the electricity query with scheduler-level retries.
+    If the first attempt returns an error (not 'success' or 'expired'),
+    retry up to SCHEDULER_QUERY_MAX_RETRIES times with delays between attempts.
+    Returns the final query result dict.
+    """
+    for attempt in range(1, SCHEDULER_QUERY_MAX_RETRIES + 2):  # +2 because range is exclusive and 1-indexed
+        result = SpiderService.execute_query(token, query_config=query_config)
+
+        # Success or expired are terminal states — return immediately
+        if result.get("status") in ("success", "expired"):
+            if attempt > 1:
+                LogService.add_log(db, f"【定时自动同步】第 {attempt} 次重试成功！", "success")
+            return result
+
+        # Query failed — check if we should retry
+        if attempt <= SCHEDULER_QUERY_MAX_RETRIES:
+            err_msg = result.get("msg", "未知错误")
+            delay_min = SCHEDULER_QUERY_RETRY_DELAY_SECONDS // 60
+            LogService.add_log(
+                db,
+                f"【定时自动同步】数据拉取失败（{err_msg}），将在 {delay_min} 分钟后进行第 {attempt} 次重试...",
+                "warning"
+            )
+            logger.warning(f"Scheduler query attempt {attempt} failed: {err_msg}. Retrying in {SCHEDULER_QUERY_RETRY_DELAY_SECONDS}s...")
+            _time.sleep(SCHEDULER_QUERY_RETRY_DELAY_SECONDS)
+        else:
+            return result
+
+    return result  # Should not reach here, but return last result as fallback
+
+
+def _attempt_login(student_id: str, gateway_password: str, query_config, db) -> dict:
+    """
+    Attempt headless browser login with scheduler-level retries.
+    Retries on 'error' status (browser crash, page timeout, element issues).
+    Does NOT retry on 'success' or 'need_sms' (terminal states).
+    """
+    for attempt in range(1, SCHEDULER_LOGIN_MAX_RETRIES + 2):
+        login_res = SpiderService.login_step1(student_id, gateway_password, query_config)
+
+        # Success or need_sms are terminal — return immediately
+        if login_res.get("status") in ("success", "need_sms"):
+            if attempt > 1:
+                LogService.add_log(db, f"【定时自动同步】浏览器登录第 {attempt} 次尝试成功！", "success")
+            return login_res
+
+        # Login failed — check if we should retry
+        if attempt <= SCHEDULER_LOGIN_MAX_RETRIES:
+            err_msg = login_res.get("msg", "未知错误")
+            LogService.add_log(
+                db,
+                f"【定时自动同步】浏览器登录失败（{err_msg}），将在 {SCHEDULER_LOGIN_RETRY_DELAY_SECONDS} 秒后进行第 {attempt + 1} 次尝试...",
+                "warning"
+            )
+            logger.warning(f"Scheduler login attempt {attempt} failed: {err_msg}. Retrying in {SCHEDULER_LOGIN_RETRY_DELAY_SECONDS}s...")
+            _time.sleep(SCHEDULER_LOGIN_RETRY_DELAY_SECONDS)
+        else:
+            return login_res
+
+    return login_res
+
 
 def fetch_and_calculate_daily(is_end_of_day: bool = False):
     """
@@ -38,7 +115,7 @@ def fetch_and_calculate_daily(is_end_of_day: bool = False):
 
         if token:
             LogService.add_log(db, "【定时自动同步】载入本地凭证成功，正在发送网关 API 请求...", "info")
-            result = SpiderService.execute_query(token, query_config=query_config)
+            result = _attempt_query(token, query_config, db)
             if result.get("status") == "expired":
                 logger.warning("Daily sync: Token expired. Triggering silent browser login...")
                 LogService.add_log(db, "【定时自动同步】检测到本地凭证已失效，正在启动后台浏览器尝试自动静默登录与 SSO 刷新...", "warning")
@@ -54,19 +131,19 @@ def fetch_and_calculate_daily(is_end_of_day: bool = False):
                     _record_sync_failure(db, today_date, "未配置网关登录账号或密码")
                 return
 
-            # Run headless browser login step1
-            login_res = SpiderService.login_step1(student_id, gateway_password, query_config)
+            # Run headless browser login step1 (with scheduler-level retries)
+            login_res = _attempt_login(student_id, gateway_password, query_config, db)
 
             if login_res.get("status") == "success":
                 token = SpiderService.read_token()
                 if token:
                     LogService.add_log(db, "【定时自动同步】后台静默登录成功！正在使用新凭证重试数据拉取...", "success")
-                    query_result = SpiderService.execute_query(token, query_config=query_config)
+                    query_result = _attempt_query(token, query_config, db)
                 else:
                     query_result = {"status": "error", "msg": "自动登录成功但读取新凭证失败"}
             elif login_res.get("status") == "need_sms":
                 logger.warning("Daily sync: MFA verification code required.")
-                LogService.add_log(db, "【定时自动同步】同步暂停：网关检测到新设备或需二次验证。请前往控制台执行“一键刷新/查询”手动填入企业微信验证码以信任设备。", "warning")
+                LogService.add_log(db, "【定时自动同步】同步暂停：网关检测到新设备或需二次验证。请前往控制台执行\u201c一键刷新/查询\u201d手动填入企业微信验证码以信任设备。", "warning")
                 if is_end_of_day:
                     _record_sync_failure(db, today_date, "网关要求多因子验证，请前往网页手动登录授权")
                 return

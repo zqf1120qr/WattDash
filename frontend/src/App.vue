@@ -89,12 +89,22 @@
             <p class="text-slate-300 text-sm mt-0.5">{{ overview.anomaly_reason }}</p>
           </div>
         </div>
-        <button 
-          @click="openRechargeModal"
-          class="py-2 px-5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200"
-        >
-          立即补录充值
-        </button>
+        <div class="flex space-x-3">
+          <button 
+            @click="triggerRecalculate"
+            :disabled="recalculateLoading"
+            class="py-2 px-5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-semibold rounded-lg shadow-md transition duration-200 flex items-center space-x-1"
+          >
+            <el-icon v-if="recalculateLoading" class="animate-spin"><Loading /></el-icon>
+            <span>{{ recalculateLoading ? '重算中...' : '重算今日数据' }}</span>
+          </button>
+          <button 
+            @click="openRechargeModal"
+            class="py-2 px-5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200"
+          >
+            立即补录充值
+          </button>
+        </div>
       </div>
 
       <!-- Stats Overview Cards Grid -->
@@ -571,6 +581,7 @@ const clearLogs = async () => {
 // Queries & Dialog loadings
 const queryLoading = ref(false)
 const isQueryAborted = ref(false)
+const recalculateLoading = ref(false)
 const rechargeModalVisible = ref(false)
 const rechargeSubmitLoading = ref(false)
 const rechargeForm = ref({
@@ -778,7 +789,9 @@ const triggerManualQuery = async (retryCount = 0) => {
       addLog('后端检测到本地 JSESSIONID 凭证超时失效。', 'warning')
       addLog('正在启动后台无头浏览器尝试自动静默登录与 SSO 刷新...', 'info')
       
-      const step1Res = await request.post('/query/login-step1')
+      // Use extended timeout (3 minutes) for login-step1 because headless browser
+      // startup, page loading, and cookie extraction can take well over 60 seconds.
+      const step1Res = await request.post('/query/login-step1', null, { timeout: 180000 })
       
       if (isQueryAborted.value) {
         addLog('同步流已被用户手动终止。', 'warning')
@@ -820,6 +833,19 @@ const triggerManualQuery = async (retryCount = 0) => {
       throw new Error(res.msg || '接口未知错误')
     }
   } catch (err) {
+    // Auto-retry once on timeout or network errors (not on business logic errors)
+    const isTimeout = err.code === 'ECONNABORTED' || (err.message && err.message.includes('timeout'))
+    const isNetworkError = err.message === 'Network Error'
+    
+    if ((isTimeout || isNetworkError) && count === 0 && !isQueryAborted.value) {
+      addLog(`请求超时或网络异常，将在 5 秒后自动重试...`, 'warning')
+      await new Promise(resolve => setTimeout(resolve, 5000))
+      if (!isQueryAborted.value) {
+        await triggerManualQuery(count + 1)
+        return
+      }
+    }
+    
     addLog(`刷新失败: ${err.message || '网络连接异常'}`, 'error')
     ElMessage.error(err.message || '网关同步失败')
     queryLoading.value = false
@@ -891,6 +917,32 @@ const submitRecharge = async () => {
     console.error(err)
   } finally {
     rechargeSubmitLoading.value = false
+  }
+}
+
+// Manual Recalculation
+const triggerRecalculate = async () => {
+  recalculateLoading.value = true
+  addLog('用户手动触发今日数据重算...', 'info')
+  try {
+    const res = await request.post('/statistics/recalculate')
+    if (res.status === 'success') {
+      addLog(`[重算完成] ${res.msg}`, 'success')
+      ElMessage.success(res.msg)
+    } else {
+      addLog(`[重算失败] ${res.msg}`, 'error')
+      ElMessage.error(res.msg)
+    }
+    // Refresh all dashboard data
+    await refreshMetrics()
+    await fetchRechargeHistory()
+    await drawTrendChart()
+    await fetchLogs()
+  } catch (err) {
+    addLog(`重算请求失败: ${err.message || '网络连接异常'}`, 'error')
+    ElMessage.error(err.message || '重算失败')
+  } finally {
+    recalculateLoading.value = false
   }
 }
 

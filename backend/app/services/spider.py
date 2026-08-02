@@ -176,8 +176,19 @@ class SpiderService:
             # Check if we were NOT redirected to CAS login, meaning the browser's active session
             # (or CAS SSO cookie) is still valid. In this case, JSESSIONID will be fetched automatically.
             if 'cas.swjtu.edu.cn' not in page.url:
-                logger.info("--- Active SSO session detected! Extracting cookie directly...")
-                jsessionid = next((c.get('value') for c in page.cookies() if c.get('name') == 'JSESSIONID'), None)
+                logger.info(f"--- Active SSO session detected! Current URL: {page.url}")
+                logger.info("--- Attempting to extract JSESSIONID cookie...")
+                
+                # The cookie may not be immediately available (page still loading/redirecting).
+                # Retry up to 3 times with 3-second waits.
+                jsessionid = None
+                for cookie_attempt in range(1, 4):
+                    jsessionid = next((c.get('value') for c in page.cookies() if c.get('name') == 'JSESSIONID'), None)
+                    if jsessionid:
+                        break
+                    logger.info(f"--- JSESSIONID not found yet (attempt {cookie_attempt}/3), waiting 3s...")
+                    time.sleep(3)
+                
                 if jsessionid:
                     cls.write_token(jsessionid)
                     cls.save_diagnostic_screenshot(page, "04_trusted_direct.png")
@@ -191,6 +202,12 @@ class SpiderService:
                             logger.error(f"Failed to save success screenshot: {se}")
                     page.quit()
                     return {"status": "success", "msg": "检测到本地SSO授权依然有效，自动静默刷新Cookie成功！"}
+                else:
+                    # Still no JSESSIONID after retries — log details for debugging
+                    logger.warning(f"--- Failed to extract JSESSIONID after retries. URL: {page.url}")
+                    all_cookies = [c.get('name') for c in page.cookies()]
+                    logger.warning(f"--- Available cookies: {all_cookies}")
+                    cls.save_diagnostic_screenshot(page, "05_no_jsessionid.png")
             
             # If we are redirected to CAS portal, we need credentials
             if 'cas.swjtu.edu.cn' in page.url:
@@ -246,7 +263,7 @@ class SpiderService:
                 return {"status": "error", "msg": "跳转成功，但未捕获到登录 JSESSIONID。"}
             
             page.quit()
-            return {"status": "error", "msg": "未知的跳转页面，未能提取 JSESSIONID。"}
+            return {"status": "error", "msg": f"未知的跳转页面（URL: {page.url}），未能提取 JSESSIONID。已保存截图 05_no_jsessionid.png 至后端数据目录。"}
             
         except Exception as e:
             logger.error(f"Error in login_step1: {e}")

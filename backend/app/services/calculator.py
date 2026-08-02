@@ -1,12 +1,22 @@
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from app.models.electricity import ElectricityRecord
 from app.models.recharge import RechargeRecord
+from app.models.intraday_balance import IntradayBalanceRecord
 
 logger = logging.getLogger("wattdash.calculator")
+
+# Recharge delay protection: recharges registered within this window (seconds)
+# are considered "recent" and may not yet be reflected by the school gateway.
+RECHARGE_GRACE_PERIOD_SECONDS = 30 * 60  # 30 minutes
+
+# If consumption exceeds this threshold (in degrees/kWh), and there are recent
+# recharges, the calculator will exclude those recharges to avoid false spikes.
+ABNORMAL_CONSUMPTION_THRESHOLD = 50.0  # 50 kWh (~25 Yuan) per day
+
 
 class CalculatorService:
     @staticmethod
@@ -101,11 +111,69 @@ class CalculatorService:
         
         if recharge_sum > 0:
             if consumption >= 0:
-                # Normal case: user recharged and consumption is positive
-                logger.info(f"Recharge of {recharge_sum} Yuan ({recharge_sum_degrees} degrees) found. Consumption calculated: {consumption} degrees")
-                for r in unsettled_recharges:
-                    r.is_settled = True
-                    r.settled_at = datetime.utcnow()
+                # ========== RECHARGE DELAY PROTECTION ==========
+                # Check if the consumption is abnormally high AND there are recently
+                # registered recharges. If so, the gateway may not have reflected the
+                # recharge yet, causing a false consumption spike.
+                if consumption > ABNORMAL_CONSUMPTION_THRESHOLD:
+                    now = datetime.utcnow()
+                    grace_cutoff = now - timedelta(seconds=RECHARGE_GRACE_PERIOD_SECONDS)
+                    
+                    # Split recharges into "stable" (registered before grace period) and "recent"
+                    recent_recharges = [r for r in unsettled_recharges if r.created_at and r.created_at > grace_cutoff]
+                    stable_recharges = [r for r in unsettled_recharges if r not in recent_recharges]
+                    
+                    if recent_recharges:
+                        recent_sum = sum(r.amount for r in recent_recharges)
+                        stable_sum = sum(r.amount for r in stable_recharges)
+                        stable_sum_degrees = stable_sum * 2.0
+                        
+                        # Recalculate without recent recharges
+                        consumption_without_recent = prev_balance + stable_sum_degrees - today_balance
+                        
+                        logger.warning(
+                            f"Recharge delay protection triggered! "
+                            f"Full consumption={consumption:.2f} degrees exceeds threshold={ABNORMAL_CONSUMPTION_THRESHOLD}. "
+                            f"Recent recharges ({recent_sum} Yuan, {len(recent_recharges)} records) within {RECHARGE_GRACE_PERIOD_SECONDS}s grace period. "
+                            f"Recalculated without recent: {consumption_without_recent:.2f} degrees."
+                        )
+                        
+                        # Use the recalculated value (may be negative if no stable recharges exist,
+                        # in which case it will be handled by the normal anomaly logic below)
+                        if consumption_without_recent >= 0:
+                            consumption = consumption_without_recent
+                            # Only settle stable recharges; recent ones stay unsettled
+                            for r in stable_recharges:
+                                r.is_settled = True
+                                r.settled_at = datetime.utcnow()
+                            # Recent recharges remain is_settled=False for next sync cycle
+                            logger.info(
+                                f"Settled {len(stable_recharges)} stable recharges. "
+                                f"Deferred {len(recent_recharges)} recent recharges ({recent_sum} Yuan) to next sync."
+                            )
+                        else:
+                            # Even without recent recharges, balance increased without explanation
+                            # → treat as normal anomaly (balance increase without recharge)
+                            is_abnormal = True
+                            anomaly_reason = (
+                                f"充值延迟保护：排除近期充值后余额仍异常增加"
+                                f"（昨日 {prev_balance:.2f} 度 + 已稳定充值 {stable_sum_degrees:.2f} 度 "
+                                f"- 今日 {today_balance:.2f} 度 = {consumption_without_recent:.2f} 度）。"
+                                f"近期充值 {recent_sum} 元已暂缓结算，待下次同步自动消化。"
+                            )
+                            consumption = None
+                    else:
+                        # All recharges are "stable" (old enough), high consumption is genuine
+                        logger.info(f"Recharge of {recharge_sum} Yuan ({recharge_sum_degrees} degrees) found. Consumption calculated: {consumption} degrees")
+                        for r in unsettled_recharges:
+                            r.is_settled = True
+                            r.settled_at = datetime.utcnow()
+                else:
+                    # Normal case: consumption within reasonable bounds
+                    logger.info(f"Recharge of {recharge_sum} Yuan ({recharge_sum_degrees} degrees) found. Consumption calculated: {consumption} degrees")
+                    for r in unsettled_recharges:
+                        r.is_settled = True
+                        r.settled_at = datetime.utcnow()
             else:
                 # Anomaly: consumption is negative even with recharge (e.g. wrong input)
                 logger.warning(f"Abnormal negative consumption: {consumption} (recharge={recharge_sum} Yuan)")
@@ -150,6 +218,81 @@ class CalculatorService:
             
         db.commit()
         return record
+
+    @staticmethod
+    def recalculate_today(db: Session) -> dict:
+        """
+        Manually recalculate today's electricity record by:
+        1. Resetting all recharges settled today to unsettled
+        2. Using the latest intraday balance snapshot to recalculate
+        
+        Returns a dict with the result status and updated record info.
+        """
+        today_date = date.today()
+        start_of_today = datetime.combine(today_date, time.min)
+        
+        # 1. Reset all recharges settled today back to unsettled
+        settled_today = (
+            db.query(RechargeRecord)
+            .filter(
+                and_(
+                    RechargeRecord.is_settled == True,
+                    RechargeRecord.settled_at >= start_of_today
+                )
+            )
+            .all()
+        )
+        reset_count = len(settled_today)
+        for r in settled_today:
+            r.is_settled = False
+            r.settled_at = None
+        db.flush()
+        
+        # 2. Get the latest intraday balance snapshot for today
+        from datetime import timezone
+        shanghai_tz = timezone(timedelta(hours=8))
+        
+        local_today_start = datetime(today_date.year, today_date.month, today_date.day, 0, 0, 0, tzinfo=shanghai_tz)
+        utc_today_start = local_today_start.astimezone(timezone.utc).replace(tzinfo=None)
+        
+        latest_intraday = (
+            db.query(IntradayBalanceRecord)
+            .filter(IntradayBalanceRecord.query_time >= utc_today_start)
+            .order_by(IntradayBalanceRecord.query_time.desc())
+            .first()
+        )
+        
+        if not latest_intraday:
+            db.rollback()
+            return {
+                "status": "error",
+                "msg": "今日暂无同步记录，无法重新计算。请先执行一键刷新获取最新数据。"
+            }
+        
+        today_balance = latest_intraday.balance
+        
+        # 3. Recalculate using the standard calculation method
+        record = CalculatorService.calculate_daily_consumption(db, today_balance, today_date)
+        
+        result = {
+            "status": "success",
+            "msg": f"重算完成！已重置 {reset_count} 条充值结算记录。",
+            "record": {
+                "record_date": record.record_date.isoformat(),
+                "balance": record.balance,
+                "consumption": record.consumption,
+                "is_abnormal": record.is_abnormal,
+                "anomaly_reason": record.anomaly_reason
+            }
+        }
+        
+        if record.is_abnormal:
+            result["msg"] += f" 当前仍存在异常：{record.anomaly_reason}"
+        else:
+            cons_str = f"{record.consumption:.2f} 度" if record.consumption is not None else "-- 度"
+            result["msg"] += f" 今日耗电量修正为: {cons_str}。"
+            
+        return result
 
     @staticmethod
     def retroactive_settlement(db: Session) -> Optional[ElectricityRecord]:

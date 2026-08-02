@@ -8,6 +8,7 @@ from app.models.user import User
 from app.models.system_log import SystemLog
 from app.services.statistics import StatisticsService
 from app.services.log import LogService
+from app.services.calculator import CalculatorService
 
 router = APIRouter()
 
@@ -121,3 +122,24 @@ def get_intraday_trends(
     """
     data = StatisticsService.get_intraday_data(db, date_str=date)
     return data
+
+@router.post("/recalculate")
+def recalculate_today(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Manually recalculate today's consumption data.
+    Resets recharge settlement state and recalculates using the latest intraday balance.
+    Useful when a recharge was registered but the gateway hadn't reflected it yet,
+    causing a false consumption spike.
+    """
+    LogService.add_log(db, "用户手动触发今日数据重算...", "info")
+    result = CalculatorService.recalculate_today(db)
+    
+    if result["status"] == "success":
+        LogService.add_log(db, f"[重算完成] {result['msg']}", "success")
+    else:
+        LogService.add_log(db, f"[重算失败] {result['msg']}", "error")
+    
+    return result
