@@ -64,7 +64,10 @@ def query_electricity(
     return {"status": "error", "msg": result.get("msg", "查询失败")}
 
 @router.post("/login-step1")
-def login_step1(current_user: User = Depends(get_current_user)):
+def login_step1(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Trigger portal login. Starts headless Chromium, enters credentials, and handles MFA request.
     """
@@ -78,12 +81,50 @@ def login_step1(current_user: User = Depends(get_current_user)):
         )
         
     result = SpiderService.login_step1(student_id=student_id, password=gateway_password, query_config=current_user.query_config)
+    
+    if result.get("status") == "success" and "power" in result:
+        power_val = result["power"]
+        today_date = date.today()
+        intraday = IntradayBalanceRecord(balance=power_val)
+        db.add(intraday)
+        db.commit()
+        record = CalculatorService.calculate_daily_consumption(db, power_val, today_date)
+        result["record"] = {
+            "id": record.id,
+            "record_date": record.record_date.isoformat(),
+            "balance": record.balance,
+            "consumption": record.consumption,
+            "is_abnormal": record.is_abnormal,
+            "anomaly_reason": record.anomaly_reason
+        }
+        
     return result
 
 @router.post("/login-step2")
-def login_step2(req: Step2Request, current_user: User = Depends(get_current_user)):
+def login_step2(
+    req: Step2Request, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Submit WeChat MFA SMS verification code and trust device.
     """
     result = SpiderService.login_step2(session_id=req.session_id, sms_code=req.sms_code, query_config=current_user.query_config)
+    
+    if result.get("status") == "success" and "power" in result:
+        power_val = result["power"]
+        today_date = date.today()
+        intraday = IntradayBalanceRecord(balance=power_val)
+        db.add(intraday)
+        db.commit()
+        record = CalculatorService.calculate_daily_consumption(db, power_val, today_date)
+        result["record"] = {
+            "id": record.id,
+            "record_date": record.record_date.isoformat(),
+            "balance": record.balance,
+            "consumption": record.consumption,
+            "is_abnormal": record.is_abnormal,
+            "anomaly_reason": record.anomaly_reason
+        }
+        
     return result

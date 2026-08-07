@@ -135,12 +135,15 @@ def fetch_and_calculate_daily(is_end_of_day: bool = False):
             login_res = _attempt_login(student_id, gateway_password, query_config, db)
 
             if login_res.get("status") == "success":
-                token = SpiderService.read_token()
-                if token:
-                    LogService.add_log(db, "【定时自动同步】后台静默登录成功！正在使用新凭证重试数据拉取...", "success")
-                    query_result = _attempt_query(token, query_config, db)
+                if "power" in login_res:
+                    query_result = login_res
                 else:
-                    query_result = {"status": "error", "msg": "自动登录成功但读取新凭证失败"}
+                    token = SpiderService.read_token()
+                    if token:
+                        LogService.add_log(db, "【定时自动同步】后台静默登录成功！正在使用新凭证重试数据拉取...", "success")
+                        query_result = _attempt_query(token, query_config, db)
+                    else:
+                        query_result = {"status": "error", "msg": "自动登录成功但读取新凭证失败"}
             elif login_res.get("status") == "need_sms":
                 logger.warning("Daily sync: MFA verification code required.")
                 LogService.add_log(db, "【定时自动同步】同步暂停：网关检测到新设备或需二次验证。请前往控制台执行\u201c一键刷新/查询\u201d手动填入企业微信验证码以信任设备。", "warning")

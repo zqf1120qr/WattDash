@@ -58,24 +58,23 @@ class SpiderService:
     @staticmethod
     def _kill_zombie_chromium():
         """
-        Kill any lingering Chromium processes that may prevent a new browser instance
+        Kill any lingering Chromium/Chrome processes that may prevent a new browser instance
         from starting. This handles zombie processes left behind by crashed sessions.
         """
         try:
             if os.name == 'nt':  # Windows
-                result = subprocess.run(
-                    ['taskkill', '/F', '/IM', 'chrome.exe', '/T'],
-                    capture_output=True, text=True, timeout=10
-                )
-                if result.returncode == 0:
-                    logger.info("Killed lingering Chrome processes on Windows.")
+                for proc in ['chrome.exe', 'chromium.exe']:
+                    subprocess.run(
+                        ['taskkill', '/F', '/IM', proc, '/T'],
+                        capture_output=True, text=True, timeout=10
+                    )
             else:  # Linux / macOS
-                result = subprocess.run(
-                    ['pkill', '-9', '-f', 'chrome.*persistent_profile'],
-                    capture_output=True, text=True, timeout=10
+                # Kill processes matching persistent_profile or chromium or chrome
+                subprocess.run(
+                    "pkill -9 -f 'persistent_profile' || pkill -9 -f 'chromium' || pkill -9 -f 'chrome'",
+                    shell=True, capture_output=True, text=True, timeout=10
                 )
-                if result.returncode == 0:
-                    logger.info("Killed lingering Chrome processes matching persistent_profile.")
+                logger.info("Executed zombie process cleanup for Chromium/Chrome.")
         except Exception as e:
             logger.warning(f"Failed to kill zombie Chromium processes: {e}")
 
@@ -100,11 +99,16 @@ class SpiderService:
     def _create_browser_with_retry(cls, max_retries: int = 3) -> ChromiumPage:
         """
         Create a ChromiumPage instance with automatic retry on connection failures.
-        Cleans up zombie processes and lock files between attempts.
+        Cleans up zombie processes and lock files BEFORE every attempt.
         """
         last_error = None
         for attempt in range(1, max_retries + 1):
             try:
+                # Always kill zombie processes and clean lock files before starting
+                cls._kill_zombie_chromium()
+                cls._clean_profile_locks()
+                time.sleep(1)
+                
                 co = cls.get_chromium_options()
                 page = ChromiumPage(co)
                 if attempt > 1:
@@ -114,10 +118,7 @@ class SpiderService:
                 last_error = e
                 logger.warning(f"Browser connection failed (attempt {attempt}/{max_retries}): {e}")
                 if attempt < max_retries:
-                    # Kill zombie processes and clean lock files before retrying
-                    cls._kill_zombie_chromium()
-                    time.sleep(3)  # Wait for processes to fully terminate
-                    cls._clean_profile_locks()
+                    time.sleep(2)
         raise last_error
 
     @staticmethod
@@ -161,55 +162,63 @@ class SpiderService:
     @classmethod
     def login_step1(cls, student_id: str, password: str, query_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Step 1: Start Chromium, check for automatic login, or fill credentials.
-        Returns 'success' (direct login or automatic refresh) or 'need_sms' (MFA).
+        Step 1: Start Chromium, check for automatic SSO login, or fill credentials on CAS.
+        Verifies extracted JSESSIONID with an actual API query before declaring success.
         """
         logger.info(">>> [Phase 1] Initializing browser for login...")
         page = None
         try:
             page = cls._create_browser_with_retry(max_retries=3)
-            page.get('https://wxy.swjtu.edu.cn/')
             
-            time.sleep(2)
+            # Target the CAS login service URL for root wxy portal (Student ID page)
+            cas_service_url = 'https://cas.swjtu.edu.cn/authserver/login?service=https%3A%2F%2Fwxy.swjtu.edu.cn%2F'
+            logger.info(f"Navigating to CAS login service: {cas_service_url}")
+            page.get(cas_service_url)
+            
+            time.sleep(2.5)
             cls.save_diagnostic_screenshot(page, "01_load_cas.png")
             
-            # Check if we were NOT redirected to CAS login, meaning the browser's active session
-            # (or CAS SSO cookie) is still valid. In this case, JSESSIONID will be fetched automatically.
+            # Check if CAS automatically authenticated via SSO cookie and redirected to wxy portal
             if 'cas.swjtu.edu.cn' not in page.url:
-                logger.info(f"--- Active SSO session detected! Current URL: {page.url}")
-                logger.info("--- Attempting to extract JSESSIONID cookie...")
+                logger.info(f"--- Active SSO session detected! Redirected to: {page.url}")
+                logger.info("--- Extracting and verifying JSESSIONID cookie...")
                 
-                # The cookie may not be immediately available (page still loading/redirecting).
-                # Retry up to 3 times with 3-second waits.
-                jsessionid = None
                 for cookie_attempt in range(1, 4):
                     jsessionid = next((c.get('value') for c in page.cookies() if c.get('name') == 'JSESSIONID'), None)
                     if jsessionid:
-                        break
-                    logger.info(f"--- JSESSIONID not found yet (attempt {cookie_attempt}/3), waiting 3s...")
-                    time.sleep(3)
+                        # Verify that the extracted JSESSIONID actually works against the gateway API!
+                        test_res = cls._execute_query_raw(jsessionid, query_config)
+                        if test_res.get("status") == "success":
+                            logger.info("--- Extracted JSESSIONID successfully verified!")
+                            cls.write_token(jsessionid)
+                            cls.save_diagnostic_screenshot(page, "04_trusted_direct.png")
+                            if query_config and query_config.get("save_login_screenshot"):
+                                try:
+                                    screenshot_path = settings.DATABASE_DIR / "success_screenshot.png"
+                                    page.get_screenshot(path=str(screenshot_path))
+                                    logger.info(f"Saved success login screenshot to {screenshot_path}")
+                                except Exception as se:
+                                    logger.error(f"Failed to save success screenshot: {se}")
+                            page.quit()
+                            return {
+                                "status": "success", 
+                                "msg": "检测到本地SSO授权依然有效，自动静默刷新Cookie成功！",
+                                "power": test_res.get("power")
+                            }
+                        else:
+                            logger.warning(f"--- Extracted JSESSIONID failed verification: {test_res.get('msg')}. Session may be expired.")
+                    time.sleep(2)
                 
-                if jsessionid:
-                    cls.write_token(jsessionid)
-                    cls.save_diagnostic_screenshot(page, "04_trusted_direct.png")
-                    # Take success screenshot if requested
-                    if query_config and query_config.get("save_login_screenshot"):
-                        try:
-                            screenshot_path = settings.DATABASE_DIR / "success_screenshot.png"
-                            page.get_screenshot(path=str(screenshot_path))
-                            logger.info(f"Saved success login screenshot to {screenshot_path}")
-                        except Exception as se:
-                            logger.error(f"Failed to save success screenshot: {se}")
-                    page.quit()
-                    return {"status": "success", "msg": "检测到本地SSO授权依然有效，自动静默刷新Cookie成功！"}
-                else:
-                    # Still no JSESSIONID after retries — log details for debugging
-                    logger.warning(f"--- Failed to extract JSESSIONID after retries. URL: {page.url}")
-                    all_cookies = [c.get('name') for c in page.cookies()]
-                    logger.warning(f"--- Available cookies: {all_cookies}")
-                    cls.save_diagnostic_screenshot(page, "05_no_jsessionid.png")
+                # If SSO cookie was stale or not working, clear browser cookies and force reload CAS
+                logger.warning("--- SSO cookie verification failed. Clearing browser cookies and reloading CAS portal...")
+                try:
+                    page.cookies.clear()
+                except Exception:
+                    pass
+                page.get(cas_service_url)
+                time.sleep(2.5)
             
-            # If we are redirected to CAS portal, we need credentials
+            # If we are on CAS portal login page, enter credentials
             if 'cas.swjtu.edu.cn' in page.url:
                 logger.info("--- Portal login page detected, entering credentials...")
                 
@@ -239,28 +248,36 @@ class SpiderService:
                         "msg": "检测到二次验证已触发，验证码已发送至企业微信。"
                     }
                 
-                # If MFA was NOT requested, it means this device is already trusted!
-                # Wait for redirection to complete and fetch token
+                # If MFA was NOT requested, device is trusted. Wait for redirection to complete
                 logger.info("--- Device already trusted. Waiting for redirection...")
-                page.wait.url_change('cas.swjtu.edu.cn', timeout=10)
+                page.wait.url_change('cas.swjtu.edu.cn', timeout=12)
+                time.sleep(2)
                 cls.save_diagnostic_screenshot(page, "04_trusted_direct.png")
-                jsessionid = next((c.get('value') for c in page.cookies() if c.get('name') == 'JSESSIONID'), None)
                 
-                if jsessionid:
-                    cls.write_token(jsessionid)
-                    # Take success screenshot if requested
-                    if query_config and query_config.get("save_login_screenshot"):
-                        try:
-                            screenshot_path = settings.DATABASE_DIR / "success_screenshot.png"
-                            page.get_screenshot(path=str(screenshot_path))
-                            logger.info(f"Saved success login screenshot to {screenshot_path}")
-                        except Exception as se:
-                            logger.error(f"Failed to save success screenshot: {se}")
-                    page.quit()
-                    return {"status": "success", "msg": "使用已信任设备直接登录成功！"}
+                # Extract and verify JSESSIONID
+                for cookie_attempt in range(1, 4):
+                    jsessionid = next((c.get('value') for c in page.cookies() if c.get('name') == 'JSESSIONID'), None)
+                    if jsessionid:
+                        test_res = cls._execute_query_raw(jsessionid, query_config)
+                        if test_res.get("status") == "success":
+                            cls.write_token(jsessionid)
+                            if query_config and query_config.get("save_login_screenshot"):
+                                try:
+                                    screenshot_path = settings.DATABASE_DIR / "success_screenshot.png"
+                                    page.get_screenshot(path=str(screenshot_path))
+                                    logger.info(f"Saved success login screenshot to {screenshot_path}")
+                                except Exception as se:
+                                    logger.error(f"Failed to save success screenshot: {se}")
+                            page.quit()
+                            return {
+                                "status": "success", 
+                                "msg": "使用已信任设备直接登录成功！",
+                                "power": test_res.get("power")
+                            }
+                    time.sleep(2)
                 
                 page.quit()
-                return {"status": "error", "msg": "跳转成功，但未捕获到登录 JSESSIONID。"}
+                return {"status": "error", "msg": "跳转成功，但未捕获到有效 JSESSIONID。"}
             
             page.quit()
             return {"status": "error", "msg": f"未知的跳转页面（URL: {page.url}），未能提取 JSESSIONID。已保存截图 05_no_jsessionid.png 至后端数据目录。"}
@@ -348,18 +365,23 @@ class SpiderService:
             jsessionid = next((c.get('value') for c in page.cookies() if c.get('name') == 'JSESSIONID'), None)
             
             if jsessionid:
-                cls.write_token(jsessionid)
-                # Take success screenshot if requested
-                if query_config and query_config.get("save_login_screenshot"):
-                    try:
-                        screenshot_path = settings.DATABASE_DIR / "success_screenshot.png"
-                        page.get_screenshot(path=str(screenshot_path))
-                        logger.info(f"Saved success login screenshot to {screenshot_path}")
-                    except Exception as se:
-                        logger.error(f"Failed to save success screenshot: {se}")
-                return {"status": "success", "msg": "动态码验证通过，授权成功！"}
+                test_res = cls._execute_query_raw(jsessionid, query_config)
+                if test_res.get("status") == "success":
+                    cls.write_token(jsessionid)
+                    if query_config and query_config.get("save_login_screenshot"):
+                        try:
+                            screenshot_path = settings.DATABASE_DIR / "success_screenshot.png"
+                            page.get_screenshot(path=str(screenshot_path))
+                            logger.info(f"Saved success login screenshot to {screenshot_path}")
+                        except Exception as se:
+                            logger.error(f"Failed to save success screenshot: {se}")
+                    return {
+                        "status": "success", 
+                        "msg": "动态码验证通过，授权成功！",
+                        "power": test_res.get("power")
+                    }
             
-            return {"status": "error", "msg": "跳转成功，但未下发 JSESSIONID。"}
+            return {"status": "error", "msg": "跳转成功，但未下发有效 JSESSIONID。"}
             
         except Exception as e:
             logger.error(f"Error in login_step2: {e}")
@@ -402,6 +424,8 @@ class SpiderService:
         headers = {
             'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             'X-Requested-With': "XMLHttpRequest",
+            'Origin': "https://wxy.swjtu.edu.cn",
+            'Referer': "https://wxy.swjtu.edu.cn/wechat/elecpay/queryelec.html",
             'Cookie': f"JSESSIONID={jsessionid}" 
         }
         
@@ -430,12 +454,12 @@ class SpiderService:
             logger.info(f"Raw query response - Status: {response.status_code}, Length: {len(response.text)}, Preview: {response.text[:250]}")
             
             if response.status_code == 302 or 'cas.swjtu.edu.cn' in response.text:
-                return {"status": "expired"}
+                return {"status": "expired", "msg": "网关 Cookie 已失效（页面重定向至 CAS 登录页）"}
                 
             res_json = response.json()
             
             if res_json.get("retcode") == "91001" or "超时" in res_json.get("errmsg", ""):
-                return {"status": "expired"}
+                return {"status": "expired", "msg": f"网关接口返回会话超时: {res_json.get('errmsg')}"}
                 
             if res_json.get("retcode") == "0":
                 msg = res_json.get("errmsg", "")
@@ -448,7 +472,7 @@ class SpiderService:
             
         except json.JSONDecodeError:
             if response.status_code == 302 or 'cas.swjtu.edu.cn' in response.text:
-                return {"status": "expired"}
+                return {"status": "expired", "msg": "网关 Cookie 已失效（返回非 JSON 的 CAS 登录页）"}
             return {"status": "error", "msg": "接口返回了非 JSON 数据"}
         except Exception as e:
             logger.error(f"Error executing electricity query: {e}")

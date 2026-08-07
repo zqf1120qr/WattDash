@@ -810,8 +810,23 @@ const triggerManualQuery = async (retryCount = 0) => {
         queryLoading.value = false
       } else if (step1Res.status === 'success') {
         addLog(`网关登录成功: ${step1Res.msg}`, 'success')
-        addLog('正在保存新 Cookie 并重试查询...', 'info')
-        await triggerManualQuery(count + 1)
+        if (step1Res.power !== undefined && step1Res.record) {
+          const p = step1Res.power
+          const r = step1Res.record
+          addLog(`同步完成！获取最新余额: ${p} 元。`, 'success')
+          if (r.is_abnormal) {
+            addLog(`[警告] 余额计算异常: ${r.anomaly_reason}`, 'warning')
+          } else {
+            addLog(`[自愈计算] 今日耗电量: ${r.consumption !== null ? r.consumption.toFixed(2) + ' 元' : '-- 元'}。`, 'success')
+          }
+          await refreshMetrics()
+          await fetchRechargeHistory()
+          await drawTrendChart()
+          queryLoading.value = false
+        } else {
+          addLog('正在保存新 Cookie 并重试查询...', 'info')
+          await triggerManualQuery(count + 1)
+        }
       } else {
         throw new Error(step1Res.msg || '自动重连失败')
       }
