@@ -41,6 +41,18 @@ def get_trends(
     trends = StatisticsService.get_trend_data(db, days=days, start_date_str=start_date, end_date_str=end_date)
     return trends
 
+@router.get("/daily")
+def get_daily_records(
+    limit: int = Query(15, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get detailed daily electricity records with day-over-day changes, energy tags, and recharge badges.
+    """
+    records = StatisticsService.get_daily_records(db, limit=limit)
+    return records
+
 @router.get("/logs")
 def get_logs(
     db: Session = Depends(get_db),

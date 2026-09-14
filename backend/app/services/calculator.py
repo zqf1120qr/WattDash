@@ -263,13 +263,21 @@ class CalculatorService:
         )
         
         if not latest_intraday:
-            db.rollback()
-            return {
-                "status": "error",
-                "msg": "今日暂无同步记录，无法重新计算。请先执行一键刷新获取最新数据。"
-            }
-        
-        today_balance = latest_intraday.balance
+            existing_today = (
+                db.query(ElectricityRecord)
+                .filter(ElectricityRecord.record_date == today_date)
+                .first()
+            )
+            if existing_today:
+                today_balance = existing_today.balance
+            else:
+                db.rollback()
+                return {
+                    "status": "error",
+                    "msg": "今日暂无同步记录，无法重新计算。请先执行一键刷新获取最新数据。"
+                }
+        else:
+            today_balance = latest_intraday.balance
         
         # 3. Recalculate using the standard calculation method
         record = CalculatorService.calculate_daily_consumption(db, today_balance, today_date)
@@ -293,6 +301,88 @@ class CalculatorService:
             result["msg"] += f" 今日耗电量修正为: {cons_str}。"
             
         return result
+
+    @staticmethod
+    def recalculate_after_recharge_deletion(db: Session, target_date: date) -> dict:
+        """
+        Recalculate consumption after a recharge record has been deleted/revoked.
+        If target_date is today or in future, triggers full recalculate_today.
+        If target_date is in the past, recalculates that historical day's consumption.
+        """
+        today_date = date.today()
+        
+        if target_date >= today_date:
+            return CalculatorService.recalculate_today(db)
+            
+        # Target date is in the past
+        existing_record = (
+            db.query(ElectricityRecord)
+            .filter(ElectricityRecord.record_date == target_date)
+            .first()
+        )
+        if not existing_record:
+            # If no record existed for that day, try to recalculate today
+            return CalculatorService.recalculate_today(db)
+            
+        # Find previous normal record before target_date
+        prev_record = (
+            db.query(ElectricityRecord)
+            .filter(
+                and_(
+                    ElectricityRecord.record_date < target_date,
+                    ElectricityRecord.is_abnormal == False
+                )
+            )
+            .order_by(ElectricityRecord.record_date.desc())
+            .first()
+        )
+        
+        if not prev_record:
+            return {
+                "status": "warning",
+                "msg": f"未找到 {target_date} 之前的基准记录，无法自动重算历史耗电。"
+            }
+            
+        day_start = datetime.combine(target_date, time.min)
+        day_end = datetime.combine(target_date, time.max)
+        day_recharges = (
+            db.query(RechargeRecord)
+            .filter(
+                and_(
+                    RechargeRecord.recharge_date >= day_start,
+                    RechargeRecord.recharge_date <= day_end
+                )
+            )
+            .all()
+        )
+        recharge_sum = sum(r.amount for r in day_recharges)
+        recharge_sum_degrees = recharge_sum * 2.0
+        
+        consumption = prev_record.balance + recharge_sum_degrees - existing_record.balance
+        if consumption >= 0:
+            existing_record.consumption = consumption
+            existing_record.is_abnormal = False
+            existing_record.anomaly_reason = None
+            for r in day_recharges:
+                r.is_settled = True
+                r.settled_at = datetime.utcnow()
+            db.commit()
+            return {
+                "status": "success",
+                "msg": f"历史充值记录撤回成功！{target_date} 耗电量已重新计算为 {consumption:.2f} 度。"
+            }
+        else:
+            existing_record.consumption = None
+            existing_record.is_abnormal = True
+            existing_record.anomaly_reason = (
+                f"撤销充值后计算耗电量为负数（昨日 {prev_record.balance:.2f} + "
+                f"剩余充值 {recharge_sum_degrees:.2f} - 今日 {existing_record.balance:.2f} = {consumption:.2f} 度）"
+            )
+            db.commit()
+            return {
+                "status": "warning",
+                "msg": f"充值撤回后，{target_date} 出现数据异常：{existing_record.anomaly_reason}"
+            }
 
     @staticmethod
     def retroactive_settlement(db: Session) -> Optional[ElectricityRecord]:

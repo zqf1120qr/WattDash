@@ -8,6 +8,7 @@ from app.models.user import User
 from app.models.recharge import RechargeRecord
 from app.schemas.recharge import RechargeRecordCreate, RechargeRecordResponse
 from app.services.calculator import CalculatorService
+from app.services.log import LogService
 
 router = APIRouter()
 
@@ -57,3 +58,34 @@ def get_recharges(
         .all()
     )
     return recharges
+
+@router.delete("/{recharge_id}")
+def delete_recharge(
+    recharge_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Revoke/Delete a manual recharge record and trigger retroactive recalculation.
+    """
+    db_recharge = db.query(RechargeRecord).filter(RechargeRecord.id == recharge_id).first()
+    if not db_recharge:
+        raise HTTPException(status_code=404, detail="未找到该充值记录")
+        
+    amount = db_recharge.amount
+    target_date = db_recharge.recharge_date.date() if db_recharge.recharge_date else datetime.utcnow().date()
+    
+    # Remove from database
+    db.delete(db_recharge)
+    db.commit()
+    
+    LogService.add_log(db, f"用户撤销了充值记录 (ID: {recharge_id}, 金额: {amount:.2f} 元)", "warning")
+    
+    # Automatically recalculate consumption for the affected date
+    recalc_result = CalculatorService.recalculate_after_recharge_deletion(db, target_date)
+    
+    return {
+        "status": "success",
+        "msg": f"充值记录（{amount:.2f} 元）已成功撤销！{recalc_result.get('msg', '')}",
+        "recalc_result": recalc_result
+    }

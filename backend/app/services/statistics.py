@@ -67,6 +67,62 @@ class StatisticsService:
         )
         month_usage = sum(r.consumption for r in month_records)
         
+        # 4. Today and yesterday consumption
+        today_record = db.query(ElectricityRecord).filter(ElectricityRecord.record_date == today).first()
+        today_consumption = round(today_record.consumption, 2) if (today_record and today_record.consumption is not None) else None
+        today_consumption_yuan = round(today_consumption * 0.5, 2) if today_consumption is not None else None
+        
+        yesterday = today - timedelta(days=1)
+        yesterday_record = db.query(ElectricityRecord).filter(ElectricityRecord.record_date == yesterday).first()
+        yesterday_consumption = round(yesterday_record.consumption, 2) if (yesterday_record and yesterday_record.consumption is not None) else None
+        yesterday_consumption_yuan = round(yesterday_consumption * 0.5, 2) if yesterday_consumption is not None else None
+        
+        # 5. 7-day average and endurance estimation
+        seven_days_ago = today - timedelta(days=7)
+        seven_days_records = (
+            db.query(ElectricityRecord)
+            .filter(
+                and_(
+                    ElectricityRecord.record_date >= seven_days_ago,
+                    ElectricityRecord.consumption != None
+                )
+            )
+            .all()
+        )
+        if seven_days_records:
+            seven_day_avg = round(sum(r.consumption for r in seven_days_records) / len(seven_days_records), 2)
+        elif month_usage > 0:
+            seven_day_avg = round(month_usage / (today.day or 1), 2)
+        else:
+            seven_day_avg = 0.0
+            
+        seven_day_avg_yuan = round(seven_day_avg * 0.5, 2)
+        
+        if seven_day_avg > 0 and balance > 0:
+            estimated_days_left = round(balance / seven_day_avg, 1)
+            estimated_end_date = (today + timedelta(days=int(estimated_days_left))).strftime("%m月%d日")
+        else:
+            estimated_days_left = None
+            estimated_end_date = None
+            
+        # 6. Usage diagnosis & adjustment tips
+        if seven_day_avg < 3.0:
+            usage_level = "low"
+            usage_level_label = "极省节能"
+            adjustment_advice = "寝室用电非常节约，能耗指标优秀，保持良好习惯即可！"
+        elif seven_day_avg <= 7.0:
+            usage_level = "normal"
+            usage_level_label = "正常用电"
+            adjustment_advice = "生活用电处于正常合理区间。建议空调保持在 26℃，夜间配合定时或睡眠模式。"
+        else:
+            usage_level = "high"
+            usage_level_label = "用电偏高"
+            adjustment_advice = "近期日均用电偏高！建议排查空调长时间低温运行、大功率设备待机或排插常开未关。"
+            
+        recharge_reminder = None
+        if estimated_days_left is not None and estimated_days_left < 3.0:
+            recharge_reminder = f"当前余额预计仅剩约 {estimated_days_left} 天，请及时充值以免夜间断电！"
+            
         return {
             "latest_balance": balance,
             "latest_balance_yuan": round(balance * 0.5, 2),
@@ -74,8 +130,117 @@ class StatisticsService:
             "month_cumulative_consumption": round(month_usage, 2),
             "month_cumulative_consumption_yuan": round(month_usage * 0.5, 2),
             "has_anomaly": has_anomaly,
-            "anomaly_reason": anomaly_reason
+            "anomaly_reason": anomaly_reason,
+            "today_consumption": today_consumption,
+            "today_consumption_yuan": today_consumption_yuan,
+            "yesterday_consumption": yesterday_consumption,
+            "yesterday_consumption_yuan": yesterday_consumption_yuan,
+            "seven_day_avg": seven_day_avg,
+            "seven_day_avg_yuan": seven_day_avg_yuan,
+            "estimated_days_left": estimated_days_left,
+            "estimated_end_date": estimated_end_date,
+            "usage_level": usage_level,
+            "usage_level_label": usage_level_label,
+            "adjustment_advice": adjustment_advice,
+            "recharge_reminder": recharge_reminder
         }
+
+    @staticmethod
+    def get_daily_records(db: Session, limit: int = 15) -> List[Dict[str, Any]]:
+        """
+        Fetch daily consumption details for the past N records with day-over-day changes,
+        energy classification tags, and associated recharge info.
+        """
+        records = (
+            db.query(ElectricityRecord)
+            .order_by(ElectricityRecord.record_date.desc())
+            .limit(limit + 1)
+            .all()
+        )
+        if not records:
+            return []
+            
+        min_date = records[-1].record_date
+        max_date = records[0].record_date
+        start_dt = datetime.combine(min_date, datetime.min.time())
+        end_dt = datetime.combine(max_date, datetime.max.time())
+        
+        recharges = (
+            db.query(RechargeRecord)
+            .filter(and_(RechargeRecord.recharge_date >= start_dt, RechargeRecord.recharge_date <= end_dt))
+            .all()
+        )
+        
+        recharge_map = {}
+        for r in recharges:
+            if r.recharge_date:
+                d = r.recharge_date.date()
+                recharge_map[d] = recharge_map.get(d, 0.0) + r.amount
+
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        
+        record_map = {r.record_date: r for r in records}
+        display_records = records[:limit]
+        results = []
+        
+        for r in display_records:
+            r_date = r.record_date
+            if r_date == today:
+                date_label = "今天"
+            elif r_date == yesterday:
+                date_label = "昨天"
+            else:
+                date_label = weekdays[r_date.weekday()]
+                
+            cons = round(r.consumption, 2) if r.consumption is not None else None
+            cons_yuan = round(cons * 0.5, 2) if cons is not None else None
+            
+            prev_cal_date = r_date - timedelta(days=1)
+            prev_r = record_map.get(prev_cal_date)
+            
+            diff_from_yesterday = None
+            diff_percent = None
+            if cons is not None and prev_r and prev_r.consumption is not None:
+                diff_from_yesterday = round(cons - prev_r.consumption, 2)
+                if prev_r.consumption > 0:
+                    diff_percent = round((diff_from_yesterday / prev_r.consumption) * 100, 1)
+                else:
+                    diff_percent = 0.0
+                    
+            if cons is None:
+                energy_level = "unknown"
+                energy_level_label = "计算中"
+            elif cons < 3.0:
+                energy_level = "low"
+                energy_level_label = "极省"
+            elif cons <= 7.0:
+                energy_level = "normal"
+                energy_level_label = "正常"
+            else:
+                energy_level = "high"
+                energy_level_label = "偏高"
+                
+            results.append({
+                "id": r.id,
+                "record_date": r_date.isoformat(),
+                "date_display": r_date.strftime("%m-%d"),
+                "date_label": date_label,
+                "consumption": cons,
+                "consumption_yuan": cons_yuan,
+                "balance": round(r.balance, 2),
+                "balance_yuan": round(r.balance * 0.5, 2),
+                "is_abnormal": r.is_abnormal,
+                "anomaly_reason": r.anomaly_reason,
+                "diff_from_yesterday": diff_from_yesterday,
+                "diff_percent": diff_percent,
+                "recharge_amount": round(recharge_map.get(r_date, 0.0), 2) if recharge_map.get(r_date, 0.0) > 0 else None,
+                "energy_level": energy_level,
+                "energy_level_label": energy_level_label
+            })
+            
+        return results
 
     @classmethod
     def get_trend_data(cls, db: Session, days: Optional[int] = 30, start_date_str: Optional[str] = None, end_date_str: Optional[str] = None) -> Dict[str, List[Any]]:

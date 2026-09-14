@@ -107,18 +107,18 @@
         </div>
       </div>
 
-      <!-- Stats Overview Cards Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <!-- Stats Overview Cards Grid (4 Columns) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         
         <!-- Card 1: Balance -->
-        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-6 relative overflow-hidden group">
+        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-5 relative overflow-hidden group shadow-lg">
           <div class="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-bl-full group-hover:bg-indigo-500/10 transition duration-300"></div>
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-3">
             <span class="text-sm font-medium text-slate-400">当前电费余额</span>
             <span class="text-xs px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400">实时</span>
           </div>
           <div class="flex items-baseline space-x-1">
-            <span class="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
+            <span class="text-3xl sm:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
               {{ overview.latest_balance_yuan }}
             </span>
             <span class="text-lg font-medium text-slate-400">元</span>
@@ -132,65 +132,323 @@
             ></div>
           </div>
           <div class="flex justify-between items-center text-xs text-slate-500 mt-2">
-            <span>剩余电量: <span class="text-slate-300 font-semibold">{{ overview.latest_balance }}</span> 度</span>
-            <span>健康度: {{ balanceSafetyText }}</span>
+            <span>剩余: <strong class="text-slate-300">{{ overview.latest_balance }}</strong> 度</span>
+            <span>{{ balanceSafetyText }}</span>
           </div>
         </div>
 
-        <!-- Card 2: Cumulative Consumption -->
-        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-6 relative overflow-hidden group">
+        <!-- Card 2: Today Consumption -->
+        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-5 relative overflow-hidden group shadow-lg">
+          <div class="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-bl-full group-hover:bg-cyan-500/10 transition duration-300"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-medium text-slate-400">今日已用电量</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400">今日实时</span>
+          </div>
+          <div class="flex items-baseline space-x-1">
+            <span class="text-3xl sm:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-emerald-400 bg-clip-text text-transparent">
+              {{ overview.today_consumption !== null && overview.today_consumption !== undefined ? overview.today_consumption : '--' }}
+            </span>
+            <span class="text-lg font-medium text-slate-400">度</span>
+          </div>
+          <div class="flex justify-between items-center text-xs text-slate-500 mt-5">
+            <span>折合电费: <strong class="text-emerald-400">{{ overview.today_consumption_yuan !== null && overview.today_consumption_yuan !== undefined ? `¥${overview.today_consumption_yuan}` : '--' }}</strong></span>
+            <span class="text-slate-500 text-[11px]">充值已自愈平抑</span>
+          </div>
+        </div>
+
+        <!-- Card 3: Yesterday Consumption -->
+        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-5 relative overflow-hidden group shadow-lg">
+          <div class="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-bl-full group-hover:bg-blue-500/10 transition duration-300"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-medium text-slate-400">昨日全天耗电</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400">日终结算</span>
+          </div>
+          <div class="flex items-baseline space-x-1">
+            <span class="text-3xl sm:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
+              {{ overview.yesterday_consumption !== null && overview.yesterday_consumption !== undefined ? overview.yesterday_consumption : '--' }}
+            </span>
+            <span class="text-lg font-medium text-slate-400">度</span>
+          </div>
+          <div class="flex justify-between items-center text-xs text-slate-500 mt-5">
+            <span>昨日电费: <strong class="text-indigo-300">{{ overview.yesterday_consumption_yuan !== null && overview.yesterday_consumption_yuan !== undefined ? `¥${overview.yesterday_consumption_yuan}` : '--' }}</strong></span>
+            <span>7天均: <strong class="text-slate-300">{{ overview.seven_day_avg || '--' }}</strong>度</span>
+          </div>
+        </div>
+
+        <!-- Card 4: Month Cumulative -->
+        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-5 relative overflow-hidden group shadow-lg">
           <div class="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-bl-full group-hover:bg-purple-500/10 transition duration-300"></div>
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-3">
             <span class="text-sm font-medium text-slate-400">本月累计耗电</span>
             <span class="text-xs px-2 py-0.5 rounded bg-purple-500/10 text-purple-400">自然月</span>
           </div>
           <div class="flex items-baseline space-x-1">
-            <span class="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+            <span class="text-3xl sm:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
               {{ overview.month_cumulative_consumption }}
             </span>
             <span class="text-lg font-medium text-slate-400">度</span>
           </div>
-          <p class="text-xs text-slate-500 mt-5">
-            日均耗电约 <span class="text-slate-300 font-semibold">{{ dailyAverageConsumption }}</span> 度，本月电费约 <span class="text-emerald-400 font-semibold">{{ overview.month_cumulative_consumption_yuan }}</span> 元
-          </p>
-        </div>
-
-        <!-- Card 3: Sync Metadata -->
-        <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-6 relative overflow-hidden group">
-          <div class="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-bl-full group-hover:bg-emerald-500/10 transition duration-300"></div>
-          <div class="flex items-center justify-between mb-4">
-            <span class="text-sm font-medium text-slate-400">自动同步状态</span>
-            <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400">定死 23:30</span>
-          </div>
-          <div class="text-slate-200 space-y-1">
-            <div class="text-sm">更新时间: <span class="text-emerald-400 font-semibold">{{ overview.update_time }}</span></div>
-            <div class="text-xs text-slate-500 mt-2">后台定时器: 开启 (APScheduler)</div>
-          </div>
-          <div class="flex space-x-3 mt-4">
-            <button 
-              v-if="!queryLoading"
-              @click="triggerManualQuery(0)" 
-              class="flex-1 py-2 px-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white text-xs font-semibold rounded-lg shadow-md transition duration-200 flex items-center justify-center space-x-1"
-            >
-              <span>一键刷新/查询</span>
-            </button>
-            <button 
-              v-else
-              @click="abortQuery" 
-              class="flex-1 py-2 px-3 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 text-white text-xs font-semibold rounded-lg shadow-md transition duration-200 flex items-center justify-center space-x-1 animate-pulse"
-            >
-              <el-icon class="animate-spin"><Loading /></el-icon>
-              <span>手动停止查询</span>
-            </button>
-            <button 
-              @click="openRechargeModal"
-              class="py-2 px-4 border border-slate-700 hover:border-slate-500 bg-slate-800/50 hover:bg-slate-800 text-slate-300 text-xs font-semibold rounded-lg transition duration-200"
-            >
-              登记充值
-            </button>
+          <div class="flex justify-between items-center text-xs text-slate-500 mt-5">
+            <span>月度花费: <strong class="text-emerald-400">¥{{ overview.month_cumulative_consumption_yuan }}</strong></span>
+            <span>日均: <strong class="text-slate-300">{{ dailyAverageConsumption }}</strong>度</span>
           </div>
         </div>
 
+      </div>
+
+      <!-- Quick Operations & Sync Control Bar -->
+      <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between shadow-lg gap-4">
+        <div class="flex items-center space-x-3 text-xs text-slate-400">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>自动同步状态: <strong class="text-emerald-400">定死 23:30 (APScheduler)</strong></span>
+          <span class="text-slate-600">|</span>
+          <span>更新时间: <strong class="text-slate-300">{{ overview.update_time }}</strong></span>
+        </div>
+        <div class="flex items-center space-x-3 w-full md:w-auto">
+          <button 
+            v-if="!queryLoading"
+            @click="triggerManualQuery(0)" 
+            class="flex-1 md:flex-initial py-2 px-4 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white text-xs font-semibold rounded-lg shadow-md transition duration-200 flex items-center justify-center space-x-1"
+          >
+            <span>一键刷新/查询</span>
+          </button>
+          <button 
+            v-else
+            @click="abortQuery" 
+            class="flex-1 md:flex-initial py-2 px-4 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 text-white text-xs font-semibold rounded-lg shadow-md transition duration-200 flex items-center justify-center space-x-1 animate-pulse"
+          >
+            <el-icon class="animate-spin"><Loading /></el-icon>
+            <span>手动停止查询</span>
+          </button>
+          <button 
+            @click="openRechargeModal"
+            class="flex-1 md:flex-initial py-2 px-4 border border-indigo-500/30 hover:border-indigo-500/60 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs font-semibold rounded-lg transition duration-200"
+          >
+            登记充值
+          </button>
+          <button 
+            @click="triggerRecalculate"
+            :disabled="recalculateLoading"
+            class="py-2 px-3 border border-amber-500/30 hover:border-amber-500/60 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-xs font-semibold rounded-lg transition duration-200 disabled:opacity-50"
+            title="重算今日耗电数据"
+          >
+            {{ recalculateLoading ? '重算中...' : '重算今日' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- NEW SECTION: Daily Energy Consumption & Smart Analytics -->
+      <div class="bg-[#151B2C]/80 border border-[#1E293B] rounded-2xl p-4 sm:p-6 shadow-xl space-y-5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#1E293B]">
+          <div>
+            <h3 class="text-lg font-bold text-white flex items-center space-x-2">
+              <span>📅</span>
+              <span>每日耗电明细与用能分析</span>
+            </h3>
+            <p class="text-xs text-slate-400 mt-0.5">
+              一眼掌握每天耗电量、折合电费及环比波动，配合续航预估与生活节能指南科学调优
+            </p>
+          </div>
+          <div class="flex items-center space-x-3 mt-3 sm:mt-0">
+            <span class="text-xs px-2.5 py-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300">
+              近7天日均: <strong class="text-indigo-400">{{ overview.seven_day_avg || '--' }}</strong> 度/天
+            </span>
+            <button 
+              @click="fetchDailyRecords"
+              :disabled="dailyRecordsLoading"
+              class="p-1.5 text-slate-400 hover:text-white bg-slate-800/50 hover:bg-slate-800 rounded-lg border border-slate-700 transition"
+              title="刷新每日明细"
+            >
+              <el-icon :class="{ 'animate-spin': dailyRecordsLoading }"><Refresh /></el-icon>
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <!-- Left Column: Daily Records Table (7 cols on desktop) -->
+          <div class="lg:col-span-7">
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
+                <span>📋</span>
+                <span>每日用能速查清单</span>
+              </h4>
+              <span class="text-[11px] text-slate-500">显示最近 {{ dailyRecords.length }} 天结算数据</span>
+            </div>
+            
+            <div class="overflow-x-auto rounded-xl border border-[#1E293B] bg-[#0B0F19]/60 max-h-[380px] overflow-y-auto">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-[#151B2C] text-slate-400 border-b border-[#1E293B] sticky top-0 z-10">
+                  <tr>
+                    <th class="py-2.5 px-3">日期</th>
+                    <th class="py-2.5 px-3">耗电量 (度)</th>
+                    <th class="py-2.5 px-3">折合电费</th>
+                    <th class="py-2.5 px-3">较前日波动</th>
+                    <th class="py-2.5 px-3">结算结余</th>
+                    <th class="py-2.5 px-3">状态/事件</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[#1E293B]/60 text-slate-200">
+                  <tr v-if="dailyRecords.length === 0">
+                    <td colspan="6" class="text-center py-10 text-slate-500">
+                      {{ dailyRecordsLoading ? '正在加载每日明细...' : '暂无每日耗电记录' }}
+                    </td>
+                  </tr>
+                  <tr 
+                    v-else 
+                    v-for="item in dailyRecords" 
+                    :key="item.id"
+                    class="hover:bg-slate-800/30 transition duration-150"
+                  >
+                    <td class="py-2.5 px-3 font-medium whitespace-nowrap">
+                      <div class="flex items-center space-x-1.5">
+                        <span class="text-slate-200">{{ item.date_display }}</span>
+                        <span 
+                          class="text-[10px] px-1.5 py-0.5 rounded font-semibold"
+                          :class="{
+                            'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30': item.date_label === '今天',
+                            'bg-purple-500/20 text-purple-400 border border-purple-500/30': item.date_label === '昨天',
+                            'text-slate-500': item.date_label !== '今天' && item.date_label !== '昨天'
+                          }"
+                        >
+                          {{ item.date_label }}
+                        </span>
+                      </div>
+                    </td>
+                    <td class="py-2.5 px-3 whitespace-nowrap">
+                      <div class="flex items-center space-x-2">
+                        <span class="font-bold text-sm" :class="item.consumption === null ? 'text-slate-500' : 'text-slate-100'">
+                          {{ item.consumption !== null ? item.consumption.toFixed(2) : '--' }}
+                        </span>
+                        <span 
+                          v-if="item.consumption !== null"
+                          class="text-[10px] px-1.5 py-0.5 rounded"
+                          :class="{
+                            'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20': item.energy_level === 'low',
+                            'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20': item.energy_level === 'normal',
+                            'bg-rose-500/10 text-rose-400 border border-rose-500/20': item.energy_level === 'high',
+                            'bg-slate-700/30 text-slate-400': item.energy_level === 'unknown'
+                          }"
+                        >
+                          {{ item.energy_level_label }}
+                        </span>
+                      </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-slate-300 font-mono whitespace-nowrap">
+                      {{ item.consumption_yuan !== null ? `¥${item.consumption_yuan.toFixed(2)}` : '--' }}
+                    </td>
+                    <td class="py-2.5 px-3 whitespace-nowrap">
+                      <span 
+                        v-if="item.diff_from_yesterday !== null" 
+                        class="flex items-center space-x-0.5 font-mono text-[11px]"
+                        :class="item.diff_from_yesterday > 0 ? 'text-rose-400' : (item.diff_from_yesterday < 0 ? 'text-emerald-400' : 'text-slate-400')"
+                      >
+                        <span>{{ item.diff_from_yesterday > 0 ? '↑' : (item.diff_from_yesterday < 0 ? '↓' : '—') }}</span>
+                        <span>{{ Math.abs(item.diff_from_yesterday).toFixed(1) }}度</span>
+                      </span>
+                      <span v-else class="text-slate-600">--</span>
+                    </td>
+                    <td class="py-2.5 px-3 text-slate-400 whitespace-nowrap font-mono text-[11px]">
+                      {{ item.balance }} 度
+                    </td>
+                    <td class="py-2.5 px-3 whitespace-nowrap">
+                      <span 
+                        v-if="item.recharge_amount" 
+                        class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-semibold animate-pulse"
+                      >
+                        +{{ item.recharge_amount }}元充值
+                      </span>
+                      <span 
+                        v-else-if="item.is_abnormal" 
+                        class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300"
+                        :title="item.anomaly_reason"
+                      >
+                        异常
+                      </span>
+                      <span v-else class="text-slate-600 text-[10px]">正常</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Right Column: Endurance & Energy Saving Suggestions (5 cols on desktop) -->
+          <div class="lg:col-span-5 flex flex-col justify-between space-y-4">
+            <!-- Battery Endurance Card -->
+            <div class="bg-[#0F172A]/70 border border-[#1E293B] rounded-xl p-4">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-semibold text-slate-400 flex items-center space-x-1.5">
+                  <span>⚡</span>
+                  <span>剩余电量续航测算</span>
+                </span>
+                <span 
+                  class="text-[10px] px-2 py-0.5 rounded-full"
+                  :class="{
+                    'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30': overview.estimated_days_left && overview.estimated_days_left >= 7,
+                    'bg-amber-500/10 text-amber-400 border border-amber-500/30': overview.estimated_days_left && overview.estimated_days_left < 7 && overview.estimated_days_left >= 3,
+                    'bg-rose-500/10 text-rose-400 border border-rose-500/30': overview.estimated_days_left && overview.estimated_days_left < 3,
+                    'bg-slate-800 text-slate-400': !overview.estimated_days_left
+                  }"
+                >
+                  {{ overview.estimated_days_left ? (overview.estimated_days_left < 3 ? '续航偏紧' : '续航充裕') : '计算中' }}
+                </span>
+              </div>
+              <div class="flex items-baseline space-x-2 my-2">
+                <span class="text-3xl font-black bg-gradient-to-r from-amber-400 to-orange-400 bg-clip-text text-transparent">
+                  {{ overview.estimated_days_left !== null && overview.estimated_days_left !== undefined ? overview.estimated_days_left : '--' }}
+                </span>
+                <span class="text-slate-400 text-sm font-medium">天</span>
+                <span v-if="overview.estimated_end_date" class="text-xs text-slate-500 ml-auto">
+                  预计可用至: <span class="text-indigo-400 font-semibold">{{ overview.estimated_end_date }}</span>
+                </span>
+              </div>
+              <div class="text-xs text-slate-400 leading-relaxed">
+                测算基准：基于寝室近 7 天日均耗电 <span class="text-indigo-300 font-medium">{{ overview.seven_day_avg || '--' }}</span> 度（约 <span class="text-emerald-400 font-medium">¥{{ overview.seven_day_avg_yuan || '--' }}</span>/天）。
+              </div>
+            </div>
+
+            <!-- Actionable Advice & Energy Saving Tips (看看怎么调整) -->
+            <div class="bg-[#0F172A]/70 border border-[#1E293B] rounded-xl p-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-indigo-400 flex items-center space-x-1.5">
+                  <span>💡</span>
+                  <span>用能评估与调节建议</span>
+                </span>
+                <span 
+                  class="text-[10px] px-2 py-0.5 rounded font-bold"
+                  :class="{
+                    'bg-emerald-500/20 text-emerald-400': overview.usage_level === 'low',
+                    'bg-cyan-500/20 text-cyan-400': overview.usage_level === 'normal',
+                    'bg-rose-500/20 text-rose-400': overview.usage_level === 'high',
+                    'bg-slate-800 text-slate-400': !overview.usage_level
+                  }"
+                >
+                  {{ overview.usage_level_label || '诊断中' }}
+                </span>
+              </div>
+
+              <p class="text-xs text-slate-300 leading-relaxed bg-[#151B2C] p-2.5 rounded-lg border border-[#1E293B]">
+                {{ overview.adjustment_advice || '生活用电处于正常合理区间。建议空调保持在 26℃，夜间配合定时或睡眠模式。' }}
+              </p>
+
+              <!-- Practical adjustments list -->
+              <div class="text-[11px] text-slate-400 space-y-2 pt-1">
+                <div class="flex items-start space-x-2">
+                  <span class="text-cyan-400 font-bold">❄️</span>
+                  <span><strong>空调控温：</strong>设定在 26℃ 配合定时睡眠，比 22℃ 每日可省约 1.5~2.5 度电。</span>
+                </div>
+                <div class="flex items-start space-x-2">
+                  <span class="text-purple-400 font-bold">🔌</span>
+                  <span><strong>待机排查：</strong>主机、显示器、充电插座关机不断电，每天产生约 0.3~0.5 度待机空耗。</span>
+                </div>
+                <div v-if="overview.recharge_reminder" class="flex items-start space-x-2 text-rose-400 font-medium">
+                  <span>⚠️</span>
+                  <span>{{ overview.recharge_reminder }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Trend Charts Panel -->
@@ -306,6 +564,27 @@
           <el-table-column prop="settled_at" label="结算时间">
             <template #default="scope">
               {{ scope.row.settled_at ? formatDateTime(scope.row.settled_at) : '--' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="110" align="center">
+            <template #default="scope">
+              <el-popconfirm
+                title="确定撤销此充值记录吗？撤销后系统将自动重新计算当日耗电量。"
+                confirm-button-text="确定撤销"
+                cancel-button-text="取消"
+                confirm-button-type="danger"
+                width="240"
+                @confirm="handleDeleteRecharge(scope.row.id)"
+              >
+                <template #reference>
+                  <button 
+                    :disabled="rechargeDeleteLoading === scope.row.id"
+                    class="text-xs px-2.5 py-1 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition disabled:opacity-50"
+                  >
+                    {{ rechargeDeleteLoading === scope.row.id ? '撤销中...' : '撤销记录' }}
+                  </button>
+                </template>
+              </el-popconfirm>
             </template>
           </el-table-column>
         </el-table>
@@ -533,12 +812,65 @@ const userInfo = ref({
 // Overview & table telemetry
 const overview = ref({
   latest_balance: 0.0,
+  latest_balance_yuan: 0.0,
   update_time: '暂无',
   month_cumulative_consumption: 0.0,
+  month_cumulative_consumption_yuan: 0.0,
   has_anomaly: false,
-  anomaly_reason: ''
+  anomaly_reason: '',
+  today_consumption: null,
+  today_consumption_yuan: null,
+  yesterday_consumption: null,
+  yesterday_consumption_yuan: null,
+  seven_day_avg: 0.0,
+  seven_day_avg_yuan: 0.0,
+  estimated_days_left: null,
+  estimated_end_date: null,
+  usage_level: 'normal',
+  usage_level_label: '正常',
+  adjustment_advice: '',
+  recharge_reminder: null
 })
 const recharges = ref([])
+const rechargeDeleteLoading = ref(null)
+
+// Daily records table states
+const dailyRecords = ref([])
+const dailyRecordsLoading = ref(false)
+
+const fetchDailyRecords = async () => {
+  dailyRecordsLoading.value = true
+  try {
+    const data = await request.get('/statistics/daily?limit=15')
+    dailyRecords.value = data
+  } catch (err) {
+    console.error('获取每日耗电明细失败:', err)
+  } finally {
+    dailyRecordsLoading.value = false
+  }
+}
+
+// Rollback / Delete recharge handler
+const handleDeleteRecharge = async (id) => {
+  rechargeDeleteLoading.value = id
+  addLog(`正在撤销充值记录 (ID: ${id}) 并重新平衡电表耗电...`, 'info')
+  try {
+    const res = await request.delete(`/recharge/${id}`)
+    ElMessage.success(res.msg || '充值记录已成功撤销！耗电量已重新计算。')
+    addLog(`[充值撤销成功] ${res.msg || ''}`, 'success')
+    // Refresh all states
+    await refreshMetrics()
+    await fetchDailyRecords()
+    await fetchRechargeHistory()
+    await drawTrendChart()
+    await fetchLogs()
+  } catch (err) {
+    ElMessage.error(err.message || '撤回充值记录失败')
+    addLog(`撤回充值记录失败: ${err.message || '未知错误'}`, 'error')
+  } finally {
+    rechargeDeleteLoading.value = null
+  }
+}
 
 // System logs console states with Database Persistence
 const systemLogs = ref([])
@@ -682,10 +1014,11 @@ const handleLogout = () => {
   ElMessage.success('已安全登出')
 }
 
-// Fetch all dashboard overview metadata, recharges and charts
+// Fetch all dashboard overview metadata, recharges, daily records and charts
 const bootstrapDashboard = async () => {
   await fetchUserProfile()
   await refreshMetrics()
+  await fetchDailyRecords()
   await fetchRechargeHistory()
   await drawTrendChart()
   await fetchLogs()
@@ -820,6 +1153,7 @@ const triggerManualQuery = async (retryCount = 0) => {
             addLog(`[自愈计算] 今日耗电量: ${r.consumption !== null ? r.consumption.toFixed(2) + ' 元' : '-- 元'}。`, 'success')
           }
           await refreshMetrics()
+          await fetchDailyRecords()
           await fetchRechargeHistory()
           await drawTrendChart()
           queryLoading.value = false
@@ -841,6 +1175,7 @@ const triggerManualQuery = async (retryCount = 0) => {
       }
       
       await refreshMetrics()
+      await fetchDailyRecords()
       await fetchRechargeHistory()
       await drawTrendChart()
       queryLoading.value = false
@@ -925,6 +1260,7 @@ const submitRecharge = async () => {
     
     // Refresh all states
     await refreshMetrics()
+    await fetchDailyRecords()
     await fetchRechargeHistory()
     await drawTrendChart()
   } catch (err) {
@@ -950,6 +1286,7 @@ const triggerRecalculate = async () => {
     }
     // Refresh all dashboard data
     await refreshMetrics()
+    await fetchDailyRecords()
     await fetchRechargeHistory()
     await drawTrendChart()
     await fetchLogs()
