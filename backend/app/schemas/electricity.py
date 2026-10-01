@@ -8,6 +8,7 @@ class ElectricityRecordBase(BaseModel):
     consumption: Optional[float] = None
     is_abnormal: bool = False
     anomaly_reason: Optional[str] = None
+    subsidy: Optional[float] = 0.0
 
 class ElectricityRecordResponse(ElectricityRecordBase):
     id: int

@@ -36,6 +36,16 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 def init_db():
     Base.metadata.create_all(bind=engine)
     
+    # Auto-migrate SQLite schema for newly introduced columns
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE electricity_records ADD COLUMN subsidy FLOAT DEFAULT 0.0"))
+            conn.commit()
+            logger.info("Migrated electricity_records table: added subsidy column.")
+        except Exception:
+            pass
+    
     # Create default user 'admin' with password 'admin' if empty
     db = SessionLocal()
     try:

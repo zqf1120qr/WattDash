@@ -142,7 +142,8 @@ class StatisticsService:
             "usage_level": usage_level,
             "usage_level_label": usage_level_label,
             "adjustment_advice": adjustment_advice,
-            "recharge_reminder": recharge_reminder
+            "recharge_reminder": recharge_reminder,
+            "today_subsidy": round(getattr(today_record, 'subsidy', 0.0) or 0.0, 2) if today_record else 0.0
         }
 
     @staticmethod
@@ -237,7 +238,8 @@ class StatisticsService:
                 "diff_percent": diff_percent,
                 "recharge_amount": round(recharge_map.get(r_date, 0.0), 2) if recharge_map.get(r_date, 0.0) > 0 else None,
                 "energy_level": energy_level,
-                "energy_level_label": energy_level_label
+                "energy_level_label": energy_level_label,
+                "subsidy": round(getattr(r, 'subsidy', 0.0) or 0.0, 2)
             })
             
         return results

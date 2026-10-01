@@ -14,5 +14,8 @@ class ElectricityRecord(Base):
     is_abnormal = Column(Boolean, default=False, index=True)             # True if balance rose without registration
     anomaly_reason = Column(String, nullable=True)                       # Explanation of why it is marked abnormal
     
+    # Monthly subsidy tracking (kWh/度)
+    subsidy = Column(Float, default=0.0, nullable=True)                  # Monthly electricity subsidy in kWh
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

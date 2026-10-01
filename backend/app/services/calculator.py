@@ -20,10 +20,43 @@ ABNORMAL_CONSUMPTION_THRESHOLD = 50.0  # 50 kWh (~25 Yuan) per day
 
 class CalculatorService:
     @staticmethod
+    def _has_month_subsidy(db: Session, target_date: date) -> bool:
+        """
+        Check if there are already records with subsidy > 0 in the current month before target_date.
+        """
+        month_start = date(target_date.year, target_date.month, 1)
+        existing_month_subsidy = (
+            db.query(ElectricityRecord)
+            .filter(
+                and_(
+                    ElectricityRecord.record_date >= month_start,
+                    ElectricityRecord.record_date < target_date,
+                    ElectricityRecord.subsidy > 0
+                )
+            )
+            .first()
+        )
+        return existing_month_subsidy is not None
+
+    @staticmethod
+    def _get_configured_subsidy(db: Session) -> float:
+        """
+        Get user-configured monthly subsidy in kWh (if any) from query_config.
+        """
+        from app.models.user import User
+        active_user = db.query(User).filter(User.is_active == True).first()
+        if active_user and active_user.query_config:
+            try:
+                return float(active_user.query_config.get("monthly_subsidy", 0.0) or 0.0)
+            except (ValueError, TypeError):
+                return 0.0
+        return 0.0
+
+    @staticmethod
     def calculate_daily_consumption(db: Session, today_balance: float, today_date: date) -> ElectricityRecord:
         """
         Calculate consumption for the given date based on today's balance,
-        yesterday's balance, and pending recharges.
+        yesterday's balance, pending recharges, and monthly subsidies.
         """
         # Find the latest normal (non-abnormal) record before today to use as baseline.
         # This prevents sync failure records (e.g. yesterday's failed run with 0.0 balance) from polluting the baseline.
@@ -84,12 +117,14 @@ class CalculatorService:
                 record.consumption = 0.0
                 record.is_abnormal = False
                 record.anomaly_reason = None
+                record.subsidy = 0.0
             else:
                 record = ElectricityRecord(
                     record_date=today_date,
                     balance=today_balance,
                     consumption=0.0,
-                    is_abnormal=False
+                    is_abnormal=False,
+                    subsidy=0.0
                 )
                 db.add(record)
             
@@ -104,22 +139,84 @@ class CalculatorService:
         # Calculation logic
         prev_balance = prev_record.balance
         recharge_sum_degrees = recharge_sum * 2.0
-        consumption = prev_balance + recharge_sum_degrees - today_balance
         
+        # Existing subsidy recorded today (if recalculating today)
+        existing_subsidy = getattr(existing_today, 'subsidy', 0.0) or 0.0
+        configured_subsidy = CalculatorService._get_configured_subsidy(db)
+        
+        # Determine whether today is considered the start of a month window
+        is_first_day = (today_date.day == 1)
+        is_cross_month = (prev_record and prev_record.record_date.month != today_date.month)
+        is_month_start_window = (today_date.day <= 3)
+        is_month_start = is_first_day or is_cross_month or (
+            is_month_start_window and (existing_subsidy > 0 or not CalculatorService._has_month_subsidy(db, today_date))
+        )
+        
+        # Net balance increase beyond registered recharges
+        net_gap = today_balance - (prev_balance + recharge_sum_degrees)
+        
+        today_subsidy = existing_subsidy
         is_abnormal = False
         anomaly_reason = None
+        consumption = None
         
-        if recharge_sum > 0:
-            if consumption >= 0:
+        if net_gap > 0:
+            # Balance increased without enough recharges recorded
+            if is_month_start:
+                # Identified as month-start electricity subsidy
+                if configured_subsidy > 0 and configured_subsidy >= net_gap:
+                    today_subsidy = configured_subsidy
+                else:
+                    today_subsidy = max(existing_subsidy, round(net_gap, 2))
+                
+                consumption = prev_balance + recharge_sum_degrees + today_subsidy - today_balance
+                if consumption < 0:
+                    consumption = 0.0
+                
+                is_abnormal = False
+                anomaly_reason = None
+                
+                logger.info(
+                    f"Month-start electricity subsidy identified: +{today_subsidy:.2f} degrees "
+                    f"(prev={prev_balance:.2f}, recharge={recharge_sum_degrees:.2f}, today={today_balance:.2f}). "
+                    f"Consumption: {consumption:.2f} degrees."
+                )
+                
+                for r in unsettled_recharges:
+                    r.is_settled = True
+                    r.settled_at = datetime.utcnow()
+            else:
+                # Mid-month balance increase without sufficient recharge
+                if recharge_sum > 0:
+                    cons_calc = prev_balance + recharge_sum_degrees - today_balance
+                    logger.warning(f"Abnormal negative consumption: {cons_calc:.2f} (recharge={recharge_sum} Yuan)")
+                    is_abnormal = True
+                    anomaly_reason = (
+                        f"计算得到的耗电量为负数（昨日 {prev_balance:.2f} 度 + "
+                        f"充值折算电量 {recharge_sum_degrees:.2f} 度 - 今日 {today_balance:.2f} 度 = {cons_calc:.2f} 度）。"
+                        f"请核对充值金额。"
+                    )
+                    consumption = None
+                else:
+                    logger.warning(f"Balance increased from {prev_balance} to {today_balance} without recharge!")
+                    is_abnormal = True
+                    anomaly_reason = (
+                        f"检测到未登记的余额增加（昨日 {prev_balance:.2f} -> 今日 {today_balance:.2f}），"
+                        f"请补录充值金额。"
+                    )
+                    consumption = None
+        else:
+            # Normal day-to-day consumption (balance <= prev + recharges)
+            effective_subsidy = today_subsidy or (configured_subsidy if is_month_start else 0.0)
+            today_subsidy = effective_subsidy
+            raw_consumption = prev_balance + recharge_sum_degrees + today_subsidy - today_balance
+            
+            if recharge_sum > 0:
                 # ========== RECHARGE DELAY PROTECTION ==========
-                # Check if the consumption is abnormally high AND there are recently
-                # registered recharges. If so, the gateway may not have reflected the
-                # recharge yet, causing a false consumption spike.
-                if consumption > ABNORMAL_CONSUMPTION_THRESHOLD:
+                if raw_consumption > ABNORMAL_CONSUMPTION_THRESHOLD:
                     now = datetime.utcnow()
                     grace_cutoff = now - timedelta(seconds=RECHARGE_GRACE_PERIOD_SECONDS)
                     
-                    # Split recharges into "stable" (registered before grace period) and "recent"
                     recent_recharges = [r for r in unsettled_recharges if r.created_at and r.created_at > grace_cutoff]
                     stable_recharges = [r for r in unsettled_recharges if r not in recent_recharges]
                     
@@ -127,33 +224,19 @@ class CalculatorService:
                         recent_sum = sum(r.amount for r in recent_recharges)
                         stable_sum = sum(r.amount for r in stable_recharges)
                         stable_sum_degrees = stable_sum * 2.0
-                        
-                        # Recalculate without recent recharges
-                        consumption_without_recent = prev_balance + stable_sum_degrees - today_balance
+                        consumption_without_recent = prev_balance + stable_sum_degrees + today_subsidy - today_balance
                         
                         logger.warning(
-                            f"Recharge delay protection triggered! "
-                            f"Full consumption={consumption:.2f} degrees exceeds threshold={ABNORMAL_CONSUMPTION_THRESHOLD}. "
-                            f"Recent recharges ({recent_sum} Yuan, {len(recent_recharges)} records) within {RECHARGE_GRACE_PERIOD_SECONDS}s grace period. "
+                            f"Recharge delay protection triggered! Full consumption={raw_consumption:.2f} degrees. "
                             f"Recalculated without recent: {consumption_without_recent:.2f} degrees."
                         )
                         
-                        # Use the recalculated value (may be negative if no stable recharges exist,
-                        # in which case it will be handled by the normal anomaly logic below)
                         if consumption_without_recent >= 0:
                             consumption = consumption_without_recent
-                            # Only settle stable recharges; recent ones stay unsettled
                             for r in stable_recharges:
                                 r.is_settled = True
                                 r.settled_at = datetime.utcnow()
-                            # Recent recharges remain is_settled=False for next sync cycle
-                            logger.info(
-                                f"Settled {len(stable_recharges)} stable recharges. "
-                                f"Deferred {len(recent_recharges)} recent recharges ({recent_sum} Yuan) to next sync."
-                            )
                         else:
-                            # Even without recent recharges, balance increased without explanation
-                            # → treat as normal anomaly (balance increase without recharge)
                             is_abnormal = True
                             anomaly_reason = (
                                 f"充值延迟保护：排除近期充值后余额仍异常增加"
@@ -163,41 +246,18 @@ class CalculatorService:
                             )
                             consumption = None
                     else:
-                        # All recharges are "stable" (old enough), high consumption is genuine
-                        logger.info(f"Recharge of {recharge_sum} Yuan ({recharge_sum_degrees} degrees) found. Consumption calculated: {consumption} degrees")
+                        consumption = raw_consumption
                         for r in unsettled_recharges:
                             r.is_settled = True
                             r.settled_at = datetime.utcnow()
                 else:
-                    # Normal case: consumption within reasonable bounds
-                    logger.info(f"Recharge of {recharge_sum} Yuan ({recharge_sum_degrees} degrees) found. Consumption calculated: {consumption} degrees")
+                    consumption = raw_consumption
                     for r in unsettled_recharges:
                         r.is_settled = True
                         r.settled_at = datetime.utcnow()
             else:
-                # Anomaly: consumption is negative even with recharge (e.g. wrong input)
-                logger.warning(f"Abnormal negative consumption: {consumption} (recharge={recharge_sum} Yuan)")
-                is_abnormal = True
-                anomaly_reason = (
-                    f"计算得到的耗电量为负数（昨日 {prev_balance:.2f} 度 + "
-                    f"充值折算电量 {recharge_sum_degrees:.2f} 度 - 今日 {today_balance:.2f} 度 = {consumption:.2f} 度）。"
-                    f"请核对充值金额。"
-                )
-                consumption = None
-        else:
-            # No recharges registered
-            if today_balance > prev_balance:
-                # Anomaly: balance increased but no recharge recorded
-                logger.warning(f"Balance increased from {prev_balance} to {today_balance} without recharge!")
-                is_abnormal = True
-                anomaly_reason = (
-                    f"检测到未登记的余额增加（昨日 {prev_balance:.2f} -> 今日 {today_balance:.2f}），"
-                    f"请补录充值金额。"
-                )
-                consumption = None
-            else:
-                # Normal day-to-day consumption
-                logger.info(f"Normal consumption: {consumption}")
+                consumption = raw_consumption
+                logger.info(f"Normal consumption: {consumption} (subsidy={today_subsidy})")
                 
         # Save or update record
         if existing_today:
@@ -206,13 +266,15 @@ class CalculatorService:
             record.consumption = consumption
             record.is_abnormal = is_abnormal
             record.anomaly_reason = anomaly_reason
+            record.subsidy = today_subsidy
         else:
             record = ElectricityRecord(
                 record_date=today_date,
                 balance=today_balance,
                 consumption=consumption,
                 is_abnormal=is_abnormal,
-                anomaly_reason=anomaly_reason
+                anomaly_reason=anomaly_reason,
+                subsidy=today_subsidy
             )
             db.add(record)
             
@@ -290,12 +352,16 @@ class CalculatorService:
                 "balance": record.balance,
                 "consumption": record.consumption,
                 "is_abnormal": record.is_abnormal,
-                "anomaly_reason": record.anomaly_reason
+                "anomaly_reason": record.anomaly_reason,
+                "subsidy": getattr(record, 'subsidy', 0.0) or 0.0
             }
         }
         
         if record.is_abnormal:
             result["msg"] += f" 当前仍存在异常：{record.anomaly_reason}"
+        elif record.subsidy and record.subsidy > 0:
+            cons_str = f"{record.consumption:.2f} 度" if record.consumption is not None else "-- 度"
+            result["msg"] += f" 识别到月初电量补贴注入 +{record.subsidy:.2f} 度，今日耗电平抑为: {cons_str}。"
         else:
             cons_str = f"{record.consumption:.2f} 度" if record.consumption is not None else "-- 度"
             result["msg"] += f" 今日耗电量修正为: {cons_str}。"
@@ -357,8 +423,9 @@ class CalculatorService:
         )
         recharge_sum = sum(r.amount for r in day_recharges)
         recharge_sum_degrees = recharge_sum * 2.0
+        day_subsidy = getattr(existing_record, 'subsidy', 0.0) or 0.0
         
-        consumption = prev_record.balance + recharge_sum_degrees - existing_record.balance
+        consumption = prev_record.balance + recharge_sum_degrees + day_subsidy - existing_record.balance
         if consumption >= 0:
             existing_record.consumption = consumption
             existing_record.is_abnormal = False
@@ -376,7 +443,7 @@ class CalculatorService:
             existing_record.is_abnormal = True
             existing_record.anomaly_reason = (
                 f"撤销充值后计算耗电量为负数（昨日 {prev_record.balance:.2f} + "
-                f"剩余充值 {recharge_sum_degrees:.2f} - 今日 {existing_record.balance:.2f} = {consumption:.2f} 度）"
+                f"剩余充值 {recharge_sum_degrees:.2f} + 补贴 {day_subsidy:.2f} - 今日 {existing_record.balance:.2f} = {consumption:.2f} 度）"
             )
             db.commit()
             return {
@@ -387,83 +454,109 @@ class CalculatorService:
     @staticmethod
     def retroactive_settlement(db: Session) -> Optional[ElectricityRecord]:
         """
-        Retroactively resolve the latest abnormal electricity record if new recharges are added.
+        Retroactively resolve abnormal electricity records if new recharges are added
+        or auto-heal month-start electricity subsidy anomalies.
         """
-        # Find the latest abnormal record
-        abnormal_record = (
+        # Find all abnormal records ordered from earliest to latest so that earlier healed records can act as baselines
+        abnormal_records = (
             db.query(ElectricityRecord)
             .filter(ElectricityRecord.is_abnormal == True)
-            .order_by(ElectricityRecord.record_date.desc())
-            .first()
-        )
-        
-        if not abnormal_record:
-            return None
-            
-        # Find the latest normal record prior to the abnormal record
-        prev_record = (
-            db.query(ElectricityRecord)
-            .filter(
-                and_(
-                    ElectricityRecord.record_date < abnormal_record.record_date,
-                    ElectricityRecord.is_abnormal == False
-                )
-            )
-            .order_by(ElectricityRecord.record_date.desc())
-            .first()
-        )
-        
-        # Fetch all unsettled recharges
-        unsettled_recharges = (
-            db.query(RechargeRecord)
-            .filter(RechargeRecord.is_settled == False)
-            .order_by(RechargeRecord.recharge_date.asc())
+            .order_by(ElectricityRecord.record_date.asc())
             .all()
         )
-        recharge_sum = sum(r.amount for r in unsettled_recharges)
         
-        if not prev_record:
-            logger.info("No previous normal record found during retroactive settlement. Bootstrapping abnormal record as baseline.")
-            abnormal_record.consumption = 0.0
-            abnormal_record.is_abnormal = False
-            abnormal_record.anomaly_reason = None
-            
-            for r in unsettled_recharges:
-                r.is_settled = True
-                r.settled_at = datetime.utcnow()
-                
-            db.commit()
-            return abnormal_record
-        
-        if recharge_sum == 0:
+        if not abnormal_records:
             return None
             
-        # Recalculate
-        recharge_sum_degrees = recharge_sum * 2.0
-        consumption = prev_record.balance + recharge_sum_degrees - abnormal_record.balance
-        
-        if consumption >= 0:
-            logger.info(f"Resolving anomaly for {abnormal_record.record_date}. New consumption: {consumption} degrees")
-            abnormal_record.consumption = consumption
-            abnormal_record.is_abnormal = False
-            abnormal_record.anomaly_reason = None
+        last_healed = None
+        for abnormal_record in abnormal_records:
+            # Find the latest normal record prior to the abnormal record
+            prev_record = (
+                db.query(ElectricityRecord)
+                .filter(
+                    and_(
+                        ElectricityRecord.record_date < abnormal_record.record_date,
+                        ElectricityRecord.is_abnormal == False
+                    )
+                )
+                .order_by(ElectricityRecord.record_date.desc())
+                .first()
+            )
             
-            # Mark all these recharges as settled
-            for r in unsettled_recharges:
-                r.is_settled = True
-                r.settled_at = datetime.utcnow()
+            # Fetch all unsettled recharges up to this abnormal record date
+            day_end = datetime.combine(abnormal_record.record_date, time.max)
+            unsettled_recharges = (
+                db.query(RechargeRecord)
+                .filter(
+                    and_(
+                        RechargeRecord.is_settled == False,
+                        RechargeRecord.recharge_date <= day_end
+                    )
+                )
+                .order_by(RechargeRecord.recharge_date.asc())
+                .all()
+            )
+            recharge_sum = sum(r.amount for r in unsettled_recharges)
+            
+            if not prev_record:
+                logger.info("No previous normal record found during retroactive settlement. Bootstrapping abnormal record as baseline.")
+                abnormal_record.consumption = 0.0
+                abnormal_record.is_abnormal = False
+                abnormal_record.anomaly_reason = None
+                abnormal_record.subsidy = 0.0
+                for r in unsettled_recharges:
+                    r.is_settled = True
+                    r.settled_at = datetime.utcnow()
+                db.commit()
+                last_healed = abnormal_record
+                continue
+            
+            # 1. Month-start subsidy auto-healing
+            is_first_day = (abnormal_record.record_date.day == 1)
+            is_cross_month = (prev_record.record_date.month != abnormal_record.record_date.month)
+            is_month_start_window = (abnormal_record.record_date.day <= 3)
+            is_month_start = is_first_day or is_cross_month or is_month_start_window
+            
+            if recharge_sum == 0:
+                diff = abnormal_record.balance - prev_record.balance
+                if is_month_start and diff > 0:
+                    logger.info(
+                        f"Retroactive settlement: auto-healing month-start anomaly for {abnormal_record.record_date} "
+                        f"as electricity subsidy (+{diff:.2f} degrees)."
+                    )
+                    abnormal_record.subsidy = round(diff, 2)
+                    abnormal_record.consumption = 0.0
+                    abnormal_record.is_abnormal = False
+                    abnormal_record.anomaly_reason = None
+                    db.commit()
+                    last_healed = abnormal_record
+                continue
                 
-            db.commit()
-            return abnormal_record
-        else:
-            logger.warning(
-                f"Retroactive recalculation still negative: {consumption} degrees "
-                f"(prev={prev_record.balance}, recharge={recharge_sum} Yuan, abnormal={abnormal_record.balance})"
-            )
-            abnormal_record.anomaly_reason = (
-                f"补录后计算得到的耗电量仍为负数（昨日 {prev_record.balance:.2f} 度 + "
-                f"已补录充值折算电量 {recharge_sum_degrees:.2f} 度 - 今日 {abnormal_record.balance:.2f} 度 = {consumption:.2f} 度）。"
-                f"请核对充值金额。"
-            )
-            db.commit()
-            return abnormal_record
+            # 2. Recharge retroactive settlement
+            recharge_sum_degrees = recharge_sum * 2.0
+            existing_sub = getattr(abnormal_record, 'subsidy', 0.0) or 0.0
+            consumption = prev_record.balance + recharge_sum_degrees + existing_sub - abnormal_record.balance
+            
+            if consumption >= 0:
+                logger.info(f"Resolving anomaly for {abnormal_record.record_date}. New consumption: {consumption} degrees")
+                abnormal_record.consumption = consumption
+                abnormal_record.is_abnormal = False
+                abnormal_record.anomaly_reason = None
+                for r in unsettled_recharges:
+                    r.is_settled = True
+                    r.settled_at = datetime.utcnow()
+                db.commit()
+                last_healed = abnormal_record
+            else:
+                logger.warning(
+                    f"Retroactive recalculation still negative: {consumption} degrees "
+                    f"(prev={prev_record.balance}, recharge={recharge_sum} Yuan, abnormal={abnormal_record.balance})"
+                )
+                abnormal_record.anomaly_reason = (
+                    f"补录后计算得到的耗电量仍为负数（昨日 {prev_record.balance:.2f} 度 + "
+                    f"已补录充值折算电量 {recharge_sum_degrees:.2f} 度 + 补贴 {existing_sub:.2f} 度 - 今日 {abnormal_record.balance:.2f} 度 = {consumption:.2f} 度）。"
+                    f"请核对充值金额。"
+                )
+                db.commit()
+                
+        return last_healed

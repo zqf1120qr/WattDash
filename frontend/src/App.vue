@@ -152,7 +152,10 @@
           </div>
           <div class="flex justify-between items-center text-xs text-slate-500 mt-5">
             <span>折合电费: <strong class="text-emerald-400">{{ overview.today_consumption_yuan !== null && overview.today_consumption_yuan !== undefined ? `¥${overview.today_consumption_yuan}` : '--' }}</strong></span>
-            <span class="text-slate-500 text-[11px]">充值已自愈平抑</span>
+            <span v-if="overview.today_subsidy && overview.today_subsidy > 0" class="text-emerald-400/90 text-[11px] font-medium">
+              🎁 月初补贴 +{{ overview.today_subsidy }}度
+            </span>
+            <span v-else class="text-slate-500 text-[11px]">充值已自愈平抑</span>
           </div>
         </div>
 
@@ -351,20 +354,29 @@
                       {{ item.balance }} 度
                     </td>
                     <td class="py-2.5 px-3 whitespace-nowrap">
-                      <span 
-                        v-if="item.recharge_amount" 
-                        class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-semibold animate-pulse"
-                      >
-                        +{{ item.recharge_amount }}元充值
-                      </span>
-                      <span 
-                        v-else-if="item.is_abnormal" 
-                        class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300"
-                        :title="item.anomaly_reason"
-                      >
-                        异常
-                      </span>
-                      <span v-else class="text-slate-600 text-[10px]">正常</span>
+                      <div class="flex items-center space-x-1.5">
+                        <span 
+                          v-if="item.subsidy && item.subsidy > 0" 
+                          class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-medium cursor-help"
+                          :title="`月初检测到电量补贴注入 +${item.subsidy} 度，已自动平抑基准`"
+                        >
+                          🎁 +{{ item.subsidy }}度补贴
+                        </span>
+                        <span 
+                          v-if="item.recharge_amount" 
+                          class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 border border-blue-500/40 text-blue-300 font-semibold animate-pulse"
+                        >
+                          +{{ item.recharge_amount }}元充值
+                        </span>
+                        <span 
+                          v-else-if="item.is_abnormal" 
+                          class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300"
+                          :title="item.anomaly_reason"
+                        >
+                          异常
+                        </span>
+                        <span v-else-if="!item.subsidy" class="text-slate-600 text-[10px]">正常</span>
+                      </div>
                     </td>
                   </tr>
                 </tbody>
@@ -760,6 +772,24 @@
               </div>
             </div>
           </el-tab-pane>
+          <el-tab-pane label="月度电量补贴">
+            <div class="space-y-4 pt-2">
+              <el-form-item label="每月月初电量补贴 (度)">
+                <el-input-number 
+                  v-model="settingsForm.monthly_subsidy" 
+                  :min="0" 
+                  :precision="1" 
+                  :step="1" 
+                  style="width: 100%" 
+                  placeholder="默认 0（自动推断差额平抑）"
+                />
+              </el-form-item>
+              <div class="text-xs text-slate-400 space-y-1.5 leading-relaxed bg-[#0B0F19] p-3 rounded-lg border border-[#1E293B]">
+                <p>💡 <strong>填 0（默认）</strong>：系统将在每月月初检测到余额增加时，自动推断补贴增量并平抑基准（适合不知道学校每月具体补贴多少时，消除异常报警）。</p>
+                <p>💡 <strong>填固定数值（如 10 或 20 度）</strong>：若知晓学校每月固定补贴额度，填入后系统将在月初按此固定额度核算当天真实耗电。</p>
+              </div>
+            </div>
+          </el-tab-pane>
           <el-tab-pane label="修改控制台密码">
             <div class="space-y-4 pt-2">
               <el-form-item label="设置新控制台密码">
@@ -829,7 +859,8 @@ const overview = ref({
   usage_level: 'normal',
   usage_level_label: '正常',
   adjustment_advice: '',
-  recharge_reminder: null
+  recharge_reminder: null,
+  today_subsidy: 0.0
 })
 const recharges = ref([])
 const rechargeDeleteLoading = ref(null)
@@ -936,7 +967,8 @@ const settingsForm = ref({
   gateway_password: '',
   query_config_str: '',
   save_login_screenshot: false,
-  password: ''
+  password: '',
+  monthly_subsidy: 0
 })
 
 // ECharts states
@@ -1043,12 +1075,14 @@ const fetchUserProfile = async () => {
       ? data.query_config
       : defaultQueryConfig
       
-    // Extract save_login_screenshot for local settings form checkbox
+    // Extract save_login_screenshot and monthly_subsidy for local settings form
     settingsForm.value.save_login_screenshot = !!qc.save_login_screenshot
+    settingsForm.value.monthly_subsidy = qc.monthly_subsidy !== undefined ? Number(qc.monthly_subsidy) : 0
     
-    // Keep raw JSON display clean by omitting the screenshot parameter from display text
+    // Keep raw JSON display clean by omitting the UI parameters from display text
     const cleanQc = { ...qc }
     delete cleanQc.save_login_screenshot
+    delete cleanQc.monthly_subsidy
     
     settingsForm.value.query_config_str = JSON.stringify(cleanQc, null, 2)
   } catch (err) {
@@ -1314,8 +1348,9 @@ const saveSettings = async () => {
       throw new Error('查询房间参数必须是合法的 JSON 格式。')
     }
     
-    // Inject local checkbox state back into the config sent to backend
+    // Inject local checkbox state and monthly_subsidy back into config sent to backend
     qc.save_login_screenshot = settingsForm.value.save_login_screenshot
+    qc.monthly_subsidy = Number(settingsForm.value.monthly_subsidy) || 0
     
     const payload = {
       student_id: settingsForm.value.student_id,

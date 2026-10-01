@@ -10,6 +10,7 @@ services:
       - CHROMIUM_PATH=/usr/bin/chromium
       - CHROMIUM_USER_DATA=/tmp/chromium_user_data
       - SECRET_KEY=your-custom-production-secret-key-here
+      - TZ=Asia/Shanghai
     ports:
       - "9100:9100"
     shm_size: '1gb'
@@ -25,6 +26,8 @@ services:
       dockerfile: ../frontend.Dockerfile
     container_name: wattdash-frontend
     restart: always
+    environment:
+      - TZ=Asia/Shanghai
     ports:
       - "80:80"
     depends_on:
